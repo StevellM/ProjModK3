@@ -5,7 +5,9 @@ function convert_gap_to_julia(w_gap,F::AnticNumberField,z::nf_elem,n::Int64)
     L = GAP.gap_to_julia(GG.CoeffsCyc(w_gap,n))   
     w = F(0)
     for l=1:(length(L))
-        L[l] == 0 || w += L[l]*z^(l-1)
+        if L[l] != 0
+	   w += L[l]*z^(l-1)
+	end
     end
     return w
 end
@@ -30,8 +32,12 @@ function convert_julia_to_gap(N::Vector{AbstractAlgebra.Generic.MatSpaceElem{nf_
 end
 
 function direct_sum_matrices(M::Union{MatElem{T},GroupElem} ,N::Union{MatElem{T},GroupElem}) where T <:SetElem 
-    typeof(M) <: GroupElem && M = matrix(M)
-    typeof(N) <: GroupElem && N = matrix(N)
+    if typeof(M) <: GroupElem 
+	M = matrix(M)
+    end
+    if typeof(N) <: GroupElem 
+	N = matrix(N)
+    end
     MI,MJ = size(M)
     NI,NJ = size(N)
     I = MI+NI
