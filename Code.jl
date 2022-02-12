@@ -745,7 +745,6 @@ function invariant_ideal_same_degree(Id::Tuple{Int64,Int64}, nvar::Int64, degree
   basis = basis_ext_power(B,t)
   char_ext_gap = t == 1 ? char_homo_gap : GG.AntiSymmetricParts(ct, char_homo_gap,t)
   L_rep = length(psr)
-  println(L_rep)
   result = []
   for i=1:L_rep
     chara = char_ext_gap[i]
