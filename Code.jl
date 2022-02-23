@@ -363,11 +363,21 @@ Given an homogeneous ideal `I`, return `true` if `V(I)` is smooth, `false` else.
 function is_smooth(I::T) where T <:MPolyIdeal
   v = [f for f in gens(I)]
   R = base_ring(I)
+  L = quo(R,I)[1]
+  X = Spec(L)
   x = gens(R)
   D = jacobi_matrix(v)
-  J = ideal(R, minors(D, length(v)))
-  rad = radical(I+J)
-  return rad == ideal(R,x) || rad == ideal(R,[R(1)])
+  Dfact = _sparse_matrix_fact(D)
+  k = length(x) - dim(L)
+  ID = _ideal_degeneracy(X, Dfact, k)
+  length(ID) == 0 ? (return true) : @assert (length(ID) == 1)
+  Y = ID[1]
+  bool = true
+  for y in x
+    U = hypersurface_complement(Y, y)
+    bool = one(U.OO.W) in U.OO.J ? bool : false
+  end
+  return bool
 end
 
 # An internal to transform an homogeneous ideal into a matrix whose columns are the coordinates
@@ -629,13 +639,13 @@ function _grass_comp_snf(V::Vector{T}, basis::Vector{Vector{S}}, smooth::Bool=tr
   bool2, _ = is_pure(w2,basis)
   L,y = PolynomialRing(F,"y")
   if !bool2
-    w = _sum_tensors(_change_coeff_ring(ww1, L), _rescale(_change_coeff_ring(ww2,L),y))
+    w = _sum_tensors(_change_coeff_ring(w1, L), _rescale(_change_coeff_ring(w2,L),y))
   else
-    w = _sum_tensors(_change_coeff_ring(ww2, L), _rescale(_change_coeff_ring(ww1,L),y))
+    w = _sum_tensors(_change_coeff_ring(w2, L), _rescale(_change_coeff_ring(w1,L),y))
   end
-  Mat = matrix(zeros(F,length(basis2),length(B)))
+  Mat = matrix(zeros(L,length(basis2),length(B)))
   for i=1:length(B)
-    col = zeros(F,length(basis2),1)
+    col = zeros(L,length(basis2),1)
     v = B[i]
     for ww in w
       if v in ww[2]
@@ -660,7 +670,7 @@ function _grass_comp_snf(V::Vector{T}, basis::Vector{Vector{S}}, smooth::Bool=tr
       bool, dec = !bool2 ? is_pure(_change_basis(v1+r*v2,basis), basis) : is_pure(_change_basis(r*v1+v2,basis), basis)
       @assert bool
       I = ideal(R,[dec[i] for i=1:length(dec)])
-      if (smooth == true && is_smooth(JJ)) || (smooth == false)
+      if (smooth == true && is_smooth(I)) || (smooth == false)
         push!(pot,(dec, I))
       end
     end
@@ -670,11 +680,11 @@ function _grass_comp_snf(V::Vector{T}, basis::Vector{Vector{S}}, smooth::Bool=tr
       return pot
     end
   else
-    r = roots(c,F)[1]
+    r = evaluate(c, 0)
     bool, dec = !bool2 ? is_pure(_change_basis(v1+r*v2,basis), basis) : is_pure(_change_basis(r*v1+v2,basis), basis)
     @assert bool	
     I = ideal(R,[dec[i] for i=1:length(dec)])
-    if (smooth == true && is_smooth(II)) || (smooth == false)
+    if (smooth == true && is_smooth(I)) || (smooth == false)
       return [(dec, I)]
     else
       return false
@@ -687,27 +697,22 @@ end
 # the Grassmannian `Gr(t,V). `W` is seen as a group algebra via `rep`. The input 'smooth' is
 # to allow only the elements in the intersection generating an ideal defining a smooth variety.
 
-function _inv_space(rep, chi , basis, smooth::Bool=true) 
-  VS = VectorSpace(base_ring(rep[1]), ncols(rep[1]))
-  v = eigenspace(transpose(rep[1]), trace(chi[1]))
-  V,f = sub(VS, [VS(w) for w in v])
-  for i = 2:(length(chi))
-    vv = eigenspace(transpose(rep[i]), trace(chi[i]))
-    VV,  = sub(VS, VS.(vv))
-    V, ff = intersect(V,VV)
-    f = compose(ff,f)
-  end
-  if length(gens(V)) == 0
+function _inv_space(rep, chi , basis, smooth::Bool=true)
+  t = length(basis[1])
+  rep = t ==1 ? rep : ext_power_rep(rep, t)
+  rep = [rep[i]-chi[i][1]*identity_matrix(base_ring(rep[i]), ncols(rep[i])) for i=1:length(rep)]
+  rep = reduce(vcat, rep)
+  dim, V = kernel(rep)
+  if dim == 0
     return false
-  elseif length(gens(V)) == 1
-    gen = f(gens(V)[1])
-    vect = gen.v
-    return _grass_comp(vect, basis, smooth)
-  elseif length(gens(V)) == 2
-    gen = [f(gens(V)[1]).v,f(gens(V)[2]).v]
-    return _grass_comp_snf(gen,basis, smooth)
+  end
+  V = [transpose(V[:,i]) for i=1:ncols(V)]
+  if dim == 1
+    return _grass_comp(V[1], basis, smooth)
+  elseif dim == 2
+    return _grass_comp_snf(V,basis, smooth)
   else
-    return [([f(gens(V)[i]).v for i=1:length(gens(V))],false)]
+    return [(V,false)]
   end
 end
 
@@ -748,15 +753,23 @@ function invariant_ideal_same_degree(Id::Tuple{Int64,Int64}, nvar::Int64, degree
   result = []
   for i=1:L_rep
     chara = char_ext_gap[i]
-    result2 = []
-    rep = t == 1 ? rep_homo[i] : ext_power_rep(rep_homo[i],t)	
+    result2 = []	
     nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(chara, lin_gap[j]) !=0]
     for chi in nice_char
-      pot = _inv_space(rep, chi, basis, smooth)
+      pot = _inv_space(rep_homo[i], chi, basis, smooth)
       if pot != false
         V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
-        result_int = symplectic ? union([II for II in I if II != false && _is_symplectic_action(psr[i], rep_homo[i], II)],[V[i] for i=1:length(V) if I[i] == false]) : union([II for II in I if II != false],[V[i] for i=1:length(V) if I[i] == false])
-        all(v -> v isa MPolyIdeal, result_int) ? (stopfirst ? (return (result_int[1], psr[i])) : result2 = union(result2, result_int)) : (result2 = union(result2, result_int)) 
+        if symplectic 
+	  _result_int = [II for II in I if II != false && _is_symplectic_action(psr[i], rep_homo[i], II)]
+	else
+	  _result_int = [II for II in I if II != false]
+	end
+	result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
+        if all(v -> v isa MPolyIdeal, result_int) 
+	  stopfirst ? (return (result_int[1], psr[i])) : result2 = union(result2, result_int)
+        else
+          result2 = union(result2, result_int)
+        end
       end
     end
     length(result2) >0 ? push!(result, (result2, psr[i])) : nothing	  
@@ -795,7 +808,7 @@ end
 # An internal to reduce a polynomial sparse matrix by deleting all zero rows and 
 # columns, and deleting rows and columns appearing several times.
 
-function _reduction_sparse_mat(M::T) where T <: MatElem{S} where S <: MPolyElem
+function _reduction_sparse_mat(M::T) where T 
   @assert !iszero(M)
   M = vcat([M[i,:] for i =1:nrows(M) if !iszero(M[i,:])])
   M = hcat([M[:,j] for j =1:ncols(M) if !iszero(M[:,j])])
@@ -819,7 +832,7 @@ end
 # the other lists that keep track of the indices of the rows and columns in which each
 # value lies.
 
-function _sparse_matrix_fact(M::T) where T <: MatElem{S} where S <: MPolyElem 
+function _sparse_matrix_fact(M::T) where T  
   @assert !iszero(M)
   M = _reduction_sparse_mat(M)
   values = [M[i,j] for j=1:ncols(M), i=1:nrows(M) if !iszero(M[i,j])]
@@ -842,6 +855,9 @@ end
 
 function _refact(Mfact)
   val, row, col = Mfact
+  if length(val) == 0
+    return [],[],[]
+  end
   valbis, rowbis, colbis = typeof(val[1])[], typeof(row[1])[], typeof(col[1])[]
   for i=1:length(val)
     if !iszero(val[i])
@@ -863,86 +879,67 @@ function _distinct(L)
   return L2 == L
 end
 
-# An internal to compute, step-by-step the ideal generated by the minors of a certain size of
-# a sparse matrix. The step can be chosen, 10000 by default, and the depth of the wanted
-# ideal can be bounded by dim_min and dim_max, in order to reduce the computations.
+# An internal based on a code of Matthias Zach (TU Kaiserslautern) for computation
+# of fitting ideals. Here it is used to look for the ideal of coordinates of pure
+#tensors (computed from the denegeracy locus for the rank of a sparse matrix).
 
-function _approx_ideal_minors_sparse_matrix(M::T, k::Int64; step::Int64 = 10000, dim_min::Int64 = 0, dim_max = inf) where T <: MatElem{S} where S <: MPolyElem
-  val, row, col = _sparse_matrix_fact(M)
-  @assert k <= length(val)
-  L = parent(val[1])
-  @assert L isa MPolyRing
-  dim_min = max(dim_min, 0)
-  dim_max = min(dim_max, length(gens(L)))
-  @assert dim_min <= dim_max
-  it = maximum(row)
-  I = ideal(L,L(0))
-  for i=it:-1:1
-    CO =  coelev(row,k,i,i)
-    indices = [index for index in CO if _distinct(col[index])]
-    q,r = divrem(length(indices), step)
-    JJ = [det(M[row[index], sort(col[index])]) for index in indices[1:r]]
-    I = length(JJ) > 0 ? radical(I+ideal(L,JJ)) : I
-    dima = dim(quo(L,I)[1])
-    dima <= dim_max ? (dima == dim_max ? (return [prime[2] for prime in primary_decomposition(I) if dim_min <= dim(quo(L,prime[2]))[1] <= dim_max]) : (return false)) : nothing
-    for j in r:step:(length(indices)-step)
-      JJ = [det(M[row[index], sort(col[index])]) for index in indices[j+1:j+step]]
-      I = length(JJ) > 0 ? radical(I+ideal(L,JJ)) : I
-      dima = dim(quo(L,I)[1])
-      dima <= dim_max ? (dima == dim_max ? (return [prime[2] for prime in primary_decomposition(I) if dim_min <= dim(quo(L,prime[2]))[1] <= dim_max]) : (return false)) : nothing
-    end
-  end
-  return [prime[2] for prime in primary_decomposition(I) if dim_min <= dim(quo(L,prime[2]))[1] <= dim_max]
-end
-
-# An internal still under development to improve the previous function without
-# having to compute minors.
-
-function _ideal_degeneracy(Mfact, k, it = 1)
+function _ideal_degeneracy(X, Mfact, k)
+  one(X.OO.W) in X.OO.J ? (return [X.OO.R.base_ring]) : nothing
+  
+  Mfact = _refact(Mfact)
   val, row, col = Mfact
-  L = parent(val[1])
-  y = gens(L)
-  if it > length(y)
-    return [ideal(L, L(1))]
-  end
-  iszero(val) ? (return [ideal(L,L(1))]) : (Mfact = _refact(Mfact))
-  val, row, col = Mfact
-  elem1 = deepcopy(y)
-  elem1[it] = L(0)
+
   if k == 1
-    if length(val) == 0
-      return [ideal(L, L(1))]
+    if length(val) == 0  
+      return [X]
     else
-      return [p[2] for p in primary_decomposition(ideal(L, val))]
+      Y = subscheme(X, ideal(X.OO.R, val))
+      one(Y.OO.W) in Y.OO.J ? (return [Y.OO.R.base_ring]) : (return [Y])
     end
   end
-  index1 = findfirst(p -> total_degree(evaluate(p, elem1)) == -1, val)
-  p, i, j = val[index], row[index], col[index]
-  for k=1:length(val)
-    if (row[k] == i) && (col[k] != j)
-      for l=1:length(val)
-        if col[l] == col[k]
-	  val[l] = val[l]*p - val[k]*_value(Mfact, row[l], j)
-	end
+
+  d = maximum(total_degree.(val))
+  (i, j) = (1, 1)
+
+  for l=1:length(val)
+    val[l] = numerator(reduce(X.OO.W(val[l]), groebner_basis(X.OO.J)))
+    if total_degree(val[l]) <= d && !iszero(val[l])
+      d = total_degree(val[l])
+      (i, j) = (row[l], col[l])
+    end
+  end
+  
+  v = _value(Mfact, i, j)
+
+  if iszero(val)
+    return [X]
+  end
+  
+  val2, row2, col2 = typeof(val[1])[], [], []
+  for l in union(1:(i-1), (i+1):maximum(row))
+    for m=1:maximum(col)
+      vall = _value(Mfact, l, m)*v - _value(Mfact, i, m)*_value(Mfact, l, j)
+      if !iszero(vall)
+        push!(val2, vall)
+	l < i ?	push!(row2, l) : push!(row2, l-1)
+	m < j ? push!(col2, m) : push!(col2, m-1)
       end
     end
   end
-  val2, row2, col2 = typeof(val[1])[], [], []
-  for k=1:length(val)
-    if (row[k] != i) && (col[k] != j)
-      push!(val2, val[k])
-      roww = row[k] < i ? row[k] : row[k]-1
-      push!(row2,roww)
-      coll = col[k] < j ? col[k] : col[k]-1
-      push!(col2, coll)
-    end
-  end
-  L2 = isempty(val2) ? [ideal(L,L(1))] : _ideal_degeneracy((val2, row2,col2), k-1, it+1)
-  val3 = [evaluate(pp, elem1) for pp in val]
-  L3 = _ideal_degeneracy((val3,row,col), k, it+1)
-  L2 = [I for I in L2 if I != ideal(L, L(1))]
-  L3 = [I for I in L3 if I != ideal(L,L(1))]
-  return union(L2,L3)
+    
+  Mfact = (val, row, col)
+  Mfact2 = (val2, row2, col2)
+
+  Y = subscheme(X, v)
+  U = hypersurface_complement(X, v)
+
+  ID = _ideal_degeneracy(Y, Mfact, k)
+  _ID2 = _ideal_degeneracy(U, Mfact2, k-1)
+  ID2 = [closure(V, X) for V in _ID2 if V != X.OO.R.base_ring]
+
+  ID = [V for V in ID if V != X.OO.R.base_ring && radical(V.OO.I) != ideal(V.OO.R, gens(V.OO.R))]
+  ID2 = [V for V in ID2 if V != X.OO.R.base_ring && radical(V.OO.I) != ideal(V.OO.R, gens(V.OO.R))]
+  return union(ID,ID2)
 end
 
 # An internal to compute the matrix of the linear map from which we read the pure tensors 
@@ -957,7 +954,7 @@ function _matrix_multivec_star(V, B, k::Int64)
   Basis2 = basis_ext_power(B,l)
   Basis3 = basis_ext_power(B,l+1)
   L,y = PolynomialRing(F,"y"=>(1:length(V)))
-  w = sum([y[i]*change_base_ring(L,V[i]) for i=1:length(V)])
+  w = sum([y[i]*map_entries(L, V[i]) for i=1:length(V)])
   Mat = _matrix_ext_powers(B,k,l)
   wstar = _change_basis(Mat*transpose(w), Basis2)
   Mat = matrix(zeros(L,length(Basis3),length(B)))
@@ -977,14 +974,19 @@ function _matrix_multivec_star(V, B, k::Int64)
 end
 
 # An internal still under development and improvement to compute intersection with 
-# Grassmannian varieties in dimension bigger than 2.
+# Grassmannian varieties in dimension bigger than 2. For now, it returns the ideals
+# parametrising the coordinates of pure tensors. It still need to compute representatives
+# of all the orbits and construct the corresponding modules/ideals.
 
-function _grass_comp_big_degree(v, basis; step = 10000, dim_min = 0, dim_max = inf)
+function _grass_comp_big_degree(V, basis)
   R = parent(basis[1][1])
   d = degrees(basis[1][1])[1]
   B = homog_basis(R,d)
   k = length(basis[1])
-  M = _matrix_multivec_star(v, B, k)
-  return _approx_ideal_minors_sparse_matrix(M,k+1, step = step, dim_min = dim_min, dim_max = dim_max)
+  M = _matrix_multivec_star(V, B, k)
+  Mfact = _sparse_matrix_fact(M)
+  X = Spec(parent(Mfact[1][1]))
+  ID = _ideal_degeneracy(X, Mfact, k+1)
+  return modulus.(OO.(ID))
 end
 
