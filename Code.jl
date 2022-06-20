@@ -1,7 +1,8 @@
 GG = GAP.Globals
 GG.LoadPackage(GAP.julia_to_gap("repsn"))
+using Markdown
 
-# An extra macro for the input checks 
+### An extra macro for the input checks 
 
 macro req(args...)
   @assert length(args) == 2
@@ -12,16 +13,13 @@ macro req(args...)
   end
 end
 
-function keep(f, A)
-  lis = [i for i=1:length(A) if f(A[i])]
-  return A[lis]
-end
+##############################################################################
+#                                                                            
+# Helpers
+#                                                                            
+##############################################################################
 
-##############################################################################
-#                                                                            
-# Extra conversion(s)
-#                                                                            
-##############################################################################
+### Extra converter
 
 """
   A conversion to transform elements of cyclotomic fields from GAP to Oscar
@@ -32,11 +30,59 @@ function _convert_gap_to_julia(w_gap,F::AnticNumberField,z::nf_elem,n::Int64)
   return w
 end
 
+### Lists operations
+
+"""
+  Given a sorted list of integers, return the list of distinct integers in
+  the last, and a second list giving the number of occurence of each value.
+"""
+function content(L::Vector{Int64})
+  @assert issorted(L)
+  Lu = unique(L)
+  cont = Int64[]
+  for i in Lu
+    numb = count(j -> j == i, L)
+    push!(cont, numb)
+  end
+  return Lu, cont
+end
+
+content(a::Int64) = content([a])
+
+"""
+  An internal to return at which index appears an element `f` in a basis `B`.
+"""
+function _index(B::Vector{T}, f::T) where T
+  @req f in B "f not in B"
+  return findfirst(b -> b == f, B)
+end
+
+"""
+  Return the list of elements in a list `A` which satisfies a function `f`.
+"""
+function keep(f, A)
+  lis = [i for i=1:length(A) if f(A[i])]
+  return A[lis]
+end
+
+"""
+  An internal that checks is all the elements of a list are distinct.
+"""
+function _distinct(L)
+  L2 = [L[1]]
+  for l in L
+    !(l in L2) ? (push!(L2,l)) : continue 
+  end
+  return L2 == L
+end
+
 ##############################################################################
 #
 # Combinatoric
 #
 ##############################################################################
+
+### Elevators
 
 """
   An internal recursive function for the elev method
@@ -77,22 +123,39 @@ function elev(L::Vector{Int64}, k::Int64)
   return _rec(Ind,L,k)
 end
 
+### For exterior powers
+
 """
-  Given a sorted list of integers, return the list of distinct integers in
-  the last, and a second list giving the number of occurence of each value.
+  Use to construct all all tuples of `k` distinct among `1, ...,n` for exterior
+  powers.
 """
-function content(L::Vector{Int64})
-  @assert issorted(L)
-  Lu = unique(L)
-  cont = Int64[]
-  for i in Lu
-    numb = count(j -> j == i, L)
-    push!(cont, numb)
+function _rec_perm(n::Int64,k::Int64)
+  if n==0 || k>n || k <= 0
+    return Int64[]
+  elseif k == 1
+    return [[i] for i=1:n]
+  elseif k == n
+    return [[i for i=1:n]]
+  else
+    L = Vector{Int64}[]
+    for j =k:n
+      list1 = _rec_perm(j-1,k-1)
+      for l in list1
+        push!(l,j)
+        push!(L,l)
+      end
+    end
+    return L
   end
-  return Lu, cont
 end
 
-content(a::Int64) = content([a])
+###############################################################
+#
+#  Tool to construct all possible character of a certain degree
+#
+###############################################################
+
+### Get list information 
 
 """
   Given a sorted list of integers `L` and an integer `d`, return the number of
@@ -131,35 +194,7 @@ function _number_sums(L::Vector{Int64}, d::Int64)
   return len, cumul, sumsum
 end
 
-"""
-  Use to construct all all tuples of `k` distinct among `1, ...,n` for exterior
-  powers.
-"""
-function _rec_perm(n::Int64,k::Int64)
-  if n==0 || k>n || k <= 0
-    return Int64[]
-  elseif k == 1
-    return [[i] for i=1:n]
-  elseif k == n
-    return [[i for i=1:n]]
-  else
-    L = Vector{Int64}[]
-    for j =k:n
-      list1 = _rec_perm(j-1,k-1)
-      for l in list1
-        push!(l,j)
-        push!(L,l)
-      end
-    end
-    return L
-  end
-end
-
-###############################################################
-#
-#  Tool to construct all possible character of a certain degree
-#
-###############################################################
+### "Elevations" for big lists
 
 mutable struct ElevCtx
   L::Vector{Int64}
@@ -239,6 +274,125 @@ end
 #
 ##############################################################################
 
+
+### Associated structures
+
+@attributes mutable struct RepRing{S, T, U, V} 
+  field::S
+  group::T
+  gens::U
+  ct::V
+  irr
+
+  function RepRing(E::T) where {T <: Oscar.GapObj}
+    e = GG.Exponent(E)
+    F, _ = cyclotomic_field(e)
+    ct = GG.CharacterTable(E)
+    Irr = GG.Irr(ct)
+    H = GG.GeneratorsOfGroup(E)
+    RR = new{typeof(F), T, typeof(H), typeof(ct)}(F, E, H, ct, Irr)
+    return RR
+  end
+end
+
+splitting_field(RR::RepRing) = RR.field
+
+underlying_group(RR::RepRing) = RR.group
+
+generators_of_group(RR::RepRing) = RR.gens
+
+character_table(RR::RepRing) = RR.ct
+
+irreducible_characters(RR::RepRing) = RR.irr
+
+polynomial_algebra(RR::RepRing) = get_attribute(RR, :poly_ring)
+
+@attributes mutable struct LinRep{S, T, U, V, W} 
+  rep_ring::RepRing{S, T, U, V}
+  mats::Vector{MatElem}
+  char_gap::W
+
+  function LinRep(RR::RepRing{S,T,U, V}, MR::Vector{ <: MatElem}, CG::W) where {S, T, U, V, W}
+    z = new{S, T, U, V, W}()
+    z.rep_ring = RR
+    z.mats = MR
+    z.char_gap = CG
+    return z
+  end
+end
+
+representation_ring(LR::LinRep) = LR.rep_ring
+
+matrix_representation(LR::LinRep) = LR.mats
+
+char_gap(LR::LinRep) = LR.char_gap
+
+dim(LR::LinRep) = LR.char_gap[1]
+
+@attributes mutable struct ProjRep{S, T, U, V, W} 
+  LR::LinRep{S, T, U, V, W}
+  G::T
+
+  function ProjRep(LR::LinRep{S, T, U, V, W}, G::T) where {S, T, U, V, W}
+    z = new{S, T, U, V, W}()
+    z.LR = LR
+    z.G = G
+    return z
+  end
+end
+
+lift(PR::ProjRep) = PR.LR
+
+underlying_group(PR::ProjRep) = PR.G
+
+representation_ring(PR::ProjRep) = representation_ring(PR.LR)
+
+matrix_representation(PR::ProjRep) = matrix_representation(PR.LR)
+
+char_gap(PR::ProjRep) = char_gap(PR.LR)
+
+dim(PR::ProjRep) = dim(PR.LR)
+
+function Base.show(io::IO, ::MIME"text/plain", RR::RepRing)
+  println(io, "Representation ring of")
+  println(io, "$(RR.group)")
+  println(io, "over")
+  print(io, "$(RR.field)")
+end
+
+function Base.show(io::IO, RR::RepRing)
+  print(io, "Representation ring of finite group over a field of characteristic 0")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", LR::LinRep)
+  println(io, "Linear $(dim(LR))-dimensional representation of")
+  println(io, "$(LR.rep_ring.group)")
+  println(io, "over")
+  println(io, "$(LR.rep_ring.field)")
+  println(io, "with matrix representation")
+  print(io, "$(LR.mats)")
+end 
+
+function Base.show(io::IO, LR::LinRep)
+  print(io, "Linear representation of finite group of dimension $(dim(LR))")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", PR::ProjRep)
+  println(io, "Linear lift of a $(dim(PR))-dimensional projective representation of")
+  println(io, "$(PR.G)")
+  println(io, "over")
+  println(io, "$(PR.LR.rep_ring.field)")
+  println(io, "with matrix representation")
+  print(io, "$(PR.LR.mats)")
+end
+
+function Base.show(io::IO, PR::ProjRep)
+    print(io, "Linear lift of a projective representation of finite group of dimension $(dim(PR.LR))")
+end
+
+
+### Identification of matrix representations
+
 """
   An internal function computing the quotient of a finite matrix group `G` by 
   its subgroup of complex multiple of the identity.
@@ -283,9 +437,9 @@ end
 
 """
   An internal functions checking whether the matrix form `rep` of a representation
-  defines a projectively suitable representation of `GG.SmallGroup(o,n)`.
+  defines a projectively faitful representation of `GG.SmallGroup(o,n)`.
 """
-function _is_good_psr(rep::Vector{T}, (o,n)::Tuple{Integer, Integer}) where T <: MatElem
+function _is_good_pfr(rep::Vector{T}, (o,n)::Tuple{Integer, Integer}) where T <: MatElem
   G_gap = _rep_to_gap_group(rep)
   if !GG.IsFinite(G_gap)
     return false
@@ -294,28 +448,40 @@ function _is_good_psr(rep::Vector{T}, (o,n)::Tuple{Integer, Integer}) where T <:
   GG.Size(G_gap) != o ? (return false) : (return GAP.gap_to_julia(GG.IdGroup(G_gap)) == [o,n])
 end
 
+### Projectively faithful representations
+
 """
   An internal function which checks whether a small group `G_gap` admits
   faitful projective representations of dimension `dim`. If yes, it returns the
-  necessary tools to create the projectively suitable representations of a Schur
+  necessary tools to create the projectively faithful representations of a Schur
   cover associated to those faithful projective representations
 """
-function _has_psr(G_gap::GAP.GapObj, dim::Int64)
+function _has_pfr(G_gap::GAP.GapObj, dim::Int64)
   f = GG.EpimorphismSchurCover(G_gap)
-  f = GG.InverseGeneralMapping(GG.IsomorphismPermGroup(GG.Source(f)))*f
-  G_cover = GG.Source(f)
-  ct = GG.CharacterTable(G_cover)
-  Irr = GG.Irr(ct)
+  H = GG.Source(f)
+  n, p = ispower(GG.Size(H))
+  if isprime(p)
+    G_cover = GG.Image(GG.EpimorphismPGroup(H, p))
+  else
+    G_cover = GG.Image(GG.IsomorphismPermGroup(H))
+  end
+  RR = RepRing(G_cover)
+  ct = character_table(RR)
+  Irr = irreducible_characters(RR)
   Irr = keep(irr -> irr[1] <= dim, Irr)
-  lin_gap = [Irr[i] for i=1:length(Irr) if Irr[i][1] == 1]
-  keep_index = Int64[]
-  sum_index = Vector{Int64}[]
   L = [irr[1] for irr in Irr]
   ps = sortperm(L)
   L, Irr = L[ps], Irr[ps]
+  RR.irr = Irr
+  lin_gap = [Irr[i] for i=1:length(Irr) if Irr[i][1] == 1]
+  set_attribute!(RR, :lin_gap, lin_gap)
+  set_attribute!(RR, :poly_ring, PolynomialRing(RR.field, "x" => 1:dim, cached = false)[1])
+  keep_index = Int64[]
+  sum_index = Vector{Int64}[]
   char_gap = GAP.GapObj[]
   local El::ElevCtx
   El = ElevCtx(L, dim)
+  @info "Classify $(len(El)) many projective representations."
   for l in El
     chi = sum(Irr[l])
     if any(lin -> lin*chi in char_gap, lin_gap)
@@ -330,37 +496,34 @@ function _has_psr(G_gap::GAP.GapObj, dim::Int64)
     push!(sum_index, l)
   end
   bool = length(keep_index) > 0
-  return bool, Irr, keep_index, sum_index
+  return bool, RR, keep_index, sum_index
 end
 
 """
-    proj_suit_rep(o::Int64, n::Int64, dim::Int64)
-              -> Vector{Vector{MatElem{nf_elem}}, Vector{GAP.GapObj}, 
-                 Vector{Vector{MatElem{nf_elem}}, Vector{GAP.GapObj}
+    projectively_faithful_representations(o::Int64, n::Int64, dim::Int64)
+                      -> Vector{Vector{MatElem{nf_elem}}, Vector{GAP.GapObj}, 
+                         Vector{Vector{MatElem{nf_elem}}, Vector{GAP.GapObj}
 
 Given a small group `G` of GAP index `[o,n]`, return representatives of all classes of
-complex projectively suitable representations of a Schur cover `E` of `G` of dimension `dim`.
-
-- The first output is the set of representatives given in Oscar matrix form for a minimal set
-  of generators `H` of `E`;
-- The second output corresponds to the characters of these representations, given as GAP objects;
-- The third output is the set of linear characters for `E` given in Oscar matrix form for `H`;
-- The last output is the set of linear characters for `E` given as GAP objects.
+complex projectively faithful representations of a Schur cover `E` of `G` of dimension `dim`.
 """
-function proj_suit_rep(o::Int64, n::Int64, dim::Int64)
+function projectively_faithful_representations(o::Int64, n::Int64, dim::Int64)
   G_gap = GG.SmallGroup(o,n)
-  bool, Irr, keep_index, sum_index = _has_psr(G_gap, dim)
+  bool, RR, keep_index, sum_index = _has_pfr(G_gap, dim)
   if bool == false
-    return Vector{MatElem{nf_elem}}[], GAP.GapObj[], Vector{MatElem{nf_elem}}[], typeof(Irr[1])[]
+    return ProjRep[]
   end
-  G_cover = GG.UnderlyingGroup(Irr[1])
-  e = GG.Exponent(G_cover)
-  F,z = cyclotomic_field(Int(e))
-  H_cover = GG.GeneratorsOfGroup(G_cover)
+  @info "Construct $(length(sum_index)) many projectively faithful representations."
+  F = splitting_field(RR)
+  e = get_attribute(F, :cyclo)
+  z = gen(F)
+  H_cover = generators_of_group(RR)
+  ct = character_table(RR)
+  Irr = irreducible_characters(RR)
+  G_cover = underlying_group(RR)
   Rep = Vector{MatElem{nf_elem}}[]
+  lin_gap = get_attribute(RR, :lin_gap)
   lin_oscar = Vector{MatElem{nf_elem}}[]
-  ct = GG.CharacterTable(G_cover)
-  lin_gap = [Irr[i] for i=1:(GG.Size(Irr)) if Irr[i][1] == 1]
   for lin in lin_gap
     rep = GG.IrreducibleAffordingRepresentation(lin)
     Mat_cover = [GG.Image(rep,h) for h in H_cover]
@@ -374,46 +537,51 @@ function proj_suit_rep(o::Int64, n::Int64, dim::Int64)
     Mat = [m for m in Mat]
     push!(lin_oscar, Mat)
   end
+  set_attribute!(RR, :lin_oscar, lin_oscar) 
   for index in keep_index
     irr = Irr[index]
-    rep = GG.IrreducibleAffordingRepresentation(irr)
-    Mat_cover = [GG.Image(rep,h) for h in H_cover]
-    Mat = MatElem{nf_elem}[]
-    for u =1:(length(Mat_cover))
-      M_cover = Mat_cover[u]
-      k = length(M_cover)
-      M = [_convert_gap_to_julia(M_cover[i,j],F,z,Int(e)) for i=1:k, j =1:k]
-      push!(Mat, matrix(F,M))
+    j = findfirst(j -> irr == lin_gap[j], 1:length(lin_gap))
+    if j === nothing
+      rep = GG.IrreducibleAffordingRepresentation(irr)
+      Mat_cover = [GG.Image(rep,h) for h in H_cover]
+      Mat = MatElem{nf_elem}[]
+      for u =1:(length(Mat_cover))
+        M_cover = Mat_cover[u]
+        k = length(M_cover)
+        M = [_convert_gap_to_julia(M_cover[i,j],F,z,Int(e)) for i=1:k, j =1:k]
+        push!(Mat, matrix(F,M))
+      end
+      Mat = [m for m in Mat]
+    else
+      Mat = lin_oscar[j]
     end
-    Mat = [m for m in Mat]
     push!(Rep, Mat)
   end
-  char_gap = GAP.GapObj[]
-  psr = Vector{MatElem{nf_elem}}[]
-  function _idx(l, keep_index)
-    return findfirst(ll -> ll == l, keep_index)
-  end
+  pfr = ProjRep[]
   for l in sum_index
     chara = sum(Irr[l])
     @assert chara[1] == dim
-    Mat = Rep[_idx(l[end], keep_index)]
+    Mat = Rep[_index( keep_index, l[end])]
     for i=length(l)-1:-1:1
-      Mat = [block_diagonal_matrix([Mat[j], Rep[_idx(l[i], keep_index)][j]]) for j=1:length(Mat)]
+      Mat = [block_diagonal_matrix([Mat[j], Rep[_index(keep_index, l[i])][j]]) for j=1:length(Mat)]
     end
-    # @assert _is_good_psr(Mat, (o,n))
+    MG = matrix_group(Mat)
     bool = true
-    for Mat_inter in psr
+    for pr in pfr
+      Mat_inter = matrix_representation(pr)
       G_inter = matrix_group(Mat_inter)
-      it2 = count(mat -> mat in G_inter, Mat)       
-      it2 == length(Mat) ? bool = false : nothing
+      MG == G_inter ? bool = false : nothing
     end
-    if bool == true 
-      push!(psr, Mat)
-      push!(char_gap, chara)
+    if bool == true
+      lr = LinRep(RR, Mat, chara)
+      pr = ProjRep(lr, G_gap)
+      push!(pfr, pr)
     end
   end
-  return (psr, char_gap, lin_oscar, lin_gap)
+  return pfr
 end
+
+### Projective representations 
 
 """
   An internal function which checks whether a small group `G_gap` admits projective
@@ -421,22 +589,32 @@ end
   If yes, it returns the tools necessary to compute the linear representations
   of a Schur cover corresponding to those projective representations
 """
-function _has_proj_rep(G_gap::GAP.GapObj, dim::Int64; index_max::IntExt = inf)
+function _has_pr(G_gap::GAP.GapObj, dim::Int64; index_max::IntExt = inf)
   f = GG.EpimorphismSchurCover(G_gap)
-  f = GG.InverseGeneralMapping(GG.IsomorphismPermGroup(GG.Source(f)))*f
-  G_cover = GG.Source(f)
-  ct = GG.CharacterTable(G_cover)
-  Irr = GG.Irr(ct)
+  H = GG.Source(f)
+  n, p = ispower(GG.Size(H))
+  if isprime(p)
+    G_cover = GG.Image(GG.EpimorphismPGroup(H, p))
+  else
+    G_cover = GG.Image(GG.IsomorphismPermGroup(H))
+  end
+  RR = RepRing(G_cover)
+  ct = character_table(RR)
+  Irr = irreducible_characters(RR)
   Irr = keep(irr -> irr[1] <= dim, Irr)
-  lin_gap = [Irr[i] for i=1:length(Irr) if Irr[i][1] == 1]
-  keep_index = Int64[]
-  sum_index = Vector{Int64}[]
   L = [irr[1] for irr in Irr]
   ps = sortperm(L)
   L, Irr = L[ps], Irr[ps]
+  RR.irr = Irr
+  lin_gap = [Irr[i] for i=1:length(Irr) if Irr[i][1] == 1]
+  set_attribute!(RR, :lin_gap, lin_gap)
+  set_attribute!(RR, :poly_ring, PolynomialRing(RR.field, "x" => 1:dim, cached = false)[1])
+  keep_index = Int64[]
+  sum_index = Vector{Int64}[]
   char_gap = GAP.GapObj[]
   local El::ElevCtx
   El = ElevCtx(L, dim)
+  @info "Classify $(len(El)) many projective representations."
   for l in El
     chi = GG.Character(G_cover, sum(Irr[l]))
     @assert chi[1] == dim
@@ -447,11 +625,7 @@ function _has_proj_rep(G_gap::GAP.GapObj, dim::Int64; index_max::IntExt = inf)
       if idx == 1
         if GG.IdGroup(Facto) != GG.IdGroup(G_gap)
           keep = false
-        else 
-	  if any(lin -> lin*chi in char_gap, lin_gap)
-            keep = false
-          end
-	end
+        end
       end
       if any(lin -> lin*chi in char_gap, lin_gap)
         keep = false
@@ -466,7 +640,7 @@ function _has_proj_rep(G_gap::GAP.GapObj, dim::Int64; index_max::IntExt = inf)
     end
   end
   bool = length(keep_index) > 0
-  return bool, Irr, keep_index, sum_index
+  return bool, RR, keep_index, sum_index
 end
 
 """
@@ -475,24 +649,27 @@ end
   group
 """
 function projective_representations(o::Int64, n::Int64, dim::Int64; index_max::IntExt = inf)
-  @req o%index_max == 0  "index must divide o"
+  @req (o >= index_max || index_max == inf) "index_max must be smaller than the order of the group"
   index_max = min(o, index_max)
   if (index_max == 1)
-    return proj_suit_rep(o, n, dim)
+    return projectively_faithful_representations(o, n, dim)
   end
   G_gap = GG.SmallGroup(o,n)
-  bool, Irr, keep_index, sum_index = _has_proj_rep(G_gap, dim, index_max = index_max)
+  bool, RR, keep_index, sum_index = _has_pr(G_gap, dim, index_max = index_max)
   if bool == false
-    return Vector{MatElem{nf_elem}}[], GAP.GapObj[], Vector{MatElem{nf_elem}}[], typeof(Irr[1])[]
+    return ProjRep[]
   end
-  G_cover = GG.UnderlyingGroup(Irr[1])
-  e = GG.Exponent(G_cover)
-  F,z = cyclotomic_field(Int(e))
-  H_cover = GG.GeneratorsOfGroup(G_cover)
+  @info "Construct $(length(sum_index)) many projective representations."
+  F = splitting_field(RR)
+  e = get_attribute(F, :cyclo)
+  z = gen(F)
+  H_cover = generators_of_group(RR)
+  ct = character_table(RR)
+  Irr = irreducible_characters(RR)
+  G_cover = underlying_group(RR)
   Rep = Vector{MatElem{nf_elem}}[]
+  lin_gap = get_attribute(RR, :lin_gap)
   lin_oscar = Vector{MatElem{nf_elem}}[]
-  ct = GG.CharacterTable(G_cover)
-  lin_gap = [Irr[i] for i=1:(GG.Size(Irr)) if Irr[i][1] == 1]
   for lin in lin_gap
     rep = GG.IrreducibleAffordingRepresentation(lin)
     Mat_cover = [GG.Image(rep,h) for h in H_cover]
@@ -506,64 +683,62 @@ function projective_representations(o::Int64, n::Int64, dim::Int64; index_max::I
     Mat = [m for m in Mat]
     push!(lin_oscar, Mat)
   end
+  set_attribute!(RR, :lin_oscar, lin_oscar)
   for index in keep_index
     irr = Irr[index]
-    rep = GG.IrreducibleAffordingRepresentation(irr)
-    Mat_cover = [GG.Image(rep,h) for h in H_cover]
-    Mat = MatElem{nf_elem}[]
-    for u =1:(length(Mat_cover))
-      M_cover = Mat_cover[u]
-      k = length(M_cover)
-      M = [_convert_gap_to_julia(M_cover[i,j],F,z,Int(e)) for i=1:k, j =1:k]
-      push!(Mat, matrix(F,M))
+    j = findfirst(j -> irr == lin_gap[j], 1:length(lin_gap))
+    if j === nothing
+      rep = GG.IrreducibleAffordingRepresentation(irr)
+      Mat_cover = [GG.Image(rep,h) for h in H_cover]
+      Mat = MatElem{nf_elem}[]
+      for u =1:(length(Mat_cover))
+        M_cover = Mat_cover[u]
+        k = length(M_cover)
+        M = [_convert_gap_to_julia(M_cover[i,j],F,z,Int(e)) for i=1:k, j =1:k]
+        push!(Mat, matrix(F,M))
+      end
+      Mat = [m for m in Mat]
+    else
+      Mat = lin_oscar[j]
     end
-    Mat = [m for m in Mat]
     push!(Rep, Mat)
   end
-  char_gap = GAP.GapObj[]
-  pr = Vector{MatElem{nf_elem}}[]
-  function _idx(l, keep_index)
-    return findfirst(ll -> ll == l, keep_index)
-  end
+  pfr = ProjRep[]
   for l in sum_index
     chara = sum(Irr[l])
     @assert chara[1] == dim
-    Mat = Rep[_idx(l[end], keep_index)]
+    Mat = Rep[_index( keep_index, l[end])]
     for i=length(l)-1:-1:1
-      Mat = [block_diagonal_matrix([Mat[j], Rep[_idx(l[i], keep_index)][j]]) for j=1:length(Mat)]
+      Mat = [block_diagonal_matrix([Mat[j], Rep[_index(keep_index, l[i])][j]]) for j=1:length(Mat)]
     end
-    # @assert o%GG.Size(_quo_proj(_rep_to_gap_group(Mat))) == 0
     bool = true
-    for Mat_inter in pr
+    for pr in pfr
+      Mat_inter = matrix_representation(pr)
       G_inter = matrix_group(Mat_inter)
-      it2 = count(mat -> mat in G_inter, Mat)
+      it2 = count(mat -> mat in G_inter, Mat)       
       it2 == length(Mat) ? bool = false : nothing
     end
     if bool == true
-      push!(pr, Mat)
-      push!(char_gap, chara)
+      lr = LinRep(RR, Mat, chara)
+      pr = ProjRep(lr, G_gap)
+      push!(pfr, pr)
     end
   end
-  return (pr, char_gap, lin_oscar, lin_gap)
+  return pfr
 end
 
 ##############################################################################
 #
-# Induced representations
+# Polynomial algebra tools
 #
 ##############################################################################
 
-"""
-  An internal for computing dual representations in matrix form from those in `Rep`.
-"""
-function _dual_rep(Rep::Vector{Vector{T}}) where T <: MatElem
-  return [transpose.(inv.(rep)) for rep in Rep]
-end
+### Basis for homogeneous components
 
 """
     homog_basis(R::MPolyRing{nf_elem}, d::Int64}) -> Vector{MPolyElem{nf_elem}}
 
-Given a multivariate polynomial `R` with the standard grading, return a 
+Given a multivariate polynomial ring `R` with the standard grading, return a 
 basis of the `d`-homogeneous part of `R`, i.e. all the monomials of homogeneous
 degree `d`. The output is ordered in the lexicographic order from the left for the indices
 of the variables of `R` involved.
@@ -577,13 +752,8 @@ function homog_basis(R::T,d::Int64) where T <: MPolyRing
   return B
 end
 
-"""
-  An internal to return at which index appears an element `f` in a basis `B`.
-"""
-function _index(B::Vector{T}, f::T) where T
-  @assert f in B
-  return findfirst(b -> b == f, B)
-end
+### Functions for conversion between abstract homogeneous polynomials and their coordinates
+### to the chosen bases
 
 """
   An internal to transform a set of polynomials whose coordinates in a basis
@@ -596,110 +766,30 @@ function _mat_to_poly(M::MatElem{T}, R::MPolyRing{T}) where T <: RingElem
 end
 
 """
-  An internal that compute the action of a group on an `d`-homogeneous part of
-  a polynomial algebra `R` from a matrix form `M` of the action on the variables of `R`.
+  An internal to change a homogeneous polynomials into a vector whose entries are the 
+  coefficients of `P` in the canonical basis of the corresponding homogeneous component
 """
-function _action_poly_ring(M::MatElem{T},R::MPolyRing{T},d::Int64) where T <: RingElem
-  @assert nrows(M) == nvars(R)
+function _homo_poly_in_coord(P::T) where T 
+  R = parent(P)
+  F = base_ring(R)
+  d = total_degree(P)
   B = homog_basis(R,d)
-  v = _mat_to_poly(M,R)
-  MM = zeros(base_ring(M), length(B), length(B))
-  for i =1:(length(B))
-    W = evaluate(B[i],v)
-    C = collect(terms(W))
-    for c in C
-      MM[_index(B,collect(monomials(c))[1]),i] = collect(coeffs(c))[1]
-    end
+  v = zeros(F,length(B), 1)
+  Coll = collect(terms(P))
+  for c in Coll
+    v[_index(B, collect(monomials(c))[1])] = collect(coeffs(c))[1]
   end
-  return matrix(MM)
+  return matrix(v)
 end
 
 """
-   homo`_`poly`_`rep(Rep:Vector{Vector{T}}, d::Int64, (char`_`gap, ct)::Tuple{Vector{S}, S})
-                 where T <: MatElem, S <: GAP.GapObj
-                    -> Vector{Vector{T}}, Vector{S}
-
-Given a set `Rep` of linear representations of a group `G` on a finite dimensional complex 
-vector space `V`, return the induced representations on the `d` homogeneous part of the dual
-of `V` seen as a polynomial algebra.
-
-- The first output is the set of induced representations given in Oscar matrix form;
-- The second output is the set of the corresponding characters given as GAP objects
-  computed from the input `char_gap`, the characters of the original representations,
-  and `ct` the character table of `G`.
+  An internal to change an homogeneous polynomial of `R` of degree `d` given in 
+  coordinates `w` into its polynomial form.
 """
-function homo_poly_rep(Rep::Vector{Vector{T}}, d::Int64, (char_gap ,ct)::Tuple{Vector{GAP.GapObj},GAP.GapObj}) where T <: MatElem
-  rep_homo = Vector{T}[]
-  _rep_dual = _dual_rep(Rep)
-  _char_dual_gap = GG.ComplexConjugate(GAP.julia_to_gap(char_gap))
-  R,x = PolynomialRing(base_ring(Rep[1][1]), "x"=>(1:ncols(Rep[1][1]))) 
-  rep_homo = [[_action_poly_ring(m,R,d) for m in rep] for rep in _rep_dual]
-  char_homo_gap = GG.SymmetricParts(ct, _char_dual_gap,d)
-  return (rep_homo, char_homo_gap)
-end
-
-function homo_poly_rep(Rep::Vector{T}, R::MPolyRing{nf_elem}, d::Int64) where T <: MatElem
-  rep_homo = T[]
-  _rep_dual = _dual_rep([Rep])[1]
-  rep_homo = [_action_poly_ring(m,R,d) for m in _rep_dual]
-  return rep_homo
-end
-
-"""
-   ext_power(M::MatElem{T}, t::Int64) where T -> MatElem{T}
-
-Return the `t`-exterior power of `M`.
-"""
-function ext_power(M::MatElem{T}, t::Int64) where T <: RingElem
-  n = ncols(M)
-  L = _rec_perm(n,t)
-  @req L != Int64[] "We must have 0 < t <= ncols(M)"
-  return matrix([minors(M[:,J],t) for J in L])
-end
-
-"""
-    ext_power_rep(rep::Vector{T}, t::Int64) where T <: MatElem{nf_elem}
-                             -> Vector{T}
-
-Given a representation of a group on a finite dimensional complex vector space `V`,
-return the induced representation on the `t`-exterior power of `V` given in
-matrix form.
-"""
-function ext_power_rep(rep::Vector{T}, t::Int64) where T <: MatElem
-  return [ext_power(M,t) for M in rep]
-end
-
-##############################################################################
-#
-# some checks functions
-#
-##############################################################################
-
-"""
-   is`_`smooth(I::T) where T <: MPolyIdeal -> Bool
-
-Given an homogeneous ideal `I`, return `true` if `V(I)` is smooth, `false` else.
-"""
-function is_smooth(I::T) where T <:MPolyIdeal
-  v = [f for f in gens(I)]
-  R = base_ring(I)
-  L = quo(R,I)[1]
-  X = Spec(L)
-  x = gens(R)
-  D = jacobi_matrix(v)
-  Dfact = _sparse_matrix_fact(D)
-  k = length(x) - dim(L)
-  ID = _ideal_degeneracy(X, Dfact, k)
-  length(ID) == 0 ? (return true) : nothing
-  for Y in ID
-    bool = true
-    for y in x
-      U = hypersurface_complement(Y, y)
-      bool = one(U.OO.W) in localized_modulus(OO(U)) ? bool : false
-    end
-    bool == false ? (return bool) : nothing
-  end
-  return true
+function _coord_in_homo_poly(w::MatElem{T}, R::MPolyRing, d::Int64) where T <: RingElem
+  B = homog_basis(R,d)
+  @assert length(B) == size(w)[1]
+  return sum([w[:,1][i]*B[i] for i=1:(size(w)[1])])
 end
 
 """
@@ -710,7 +800,7 @@ function _homo_ideal_in_coord(I::T) where T <:MPolyIdeal
   g = gens(I)
   R = base_ring(I)
   F = base_ring(R)
-  d = sum(degrees(collect(terms(g[1]))[1]))
+  d = total_degree(g[1])
   @req all(gg -> sum(degrees(collect(terms(gg))[1])) == d, g) "The generators of `I` must be of the same homogeneous degree"
   B = homog_basis(R,d)
   v = zeros(F,length(B),length(g))
@@ -725,180 +815,29 @@ function _homo_ideal_in_coord(I::T) where T <:MPolyIdeal
   return (v,B)
 end
 
-"""
-  An internal to check if an ideal is invariant under a group action given by `rep_homo`.
-  The generators of `I` has to be of the same degree
-"""
-function _is_invariant_by_rep(rep::Vector{S}, I::T) where {S,T}
-  R = base_ring(I)
-  d = total_degree(gens(I)[1])
-  rep_homo = homo_poly_rep(rep, R, d)
-  F = base_ring(R)
-  Coord,_ = _homo_ideal_in_coord(I)
-  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
-  for M in rep_homo
-    for j=1:ncols(Coord)
-      act = change_base_ring(L,M*matrix(Coord[:,j]))
-      v = y[end]*act-sum([y[i]*change_base_ring(L,matrix(Coord[:,i])) for i=1:ncols(Coord)])
-      II = ideal(L,[v[i,:][1] for i=1:nrows(v)])
-      J = radical(II)
-      J == ideal(L,y) || J == ideal(L,L(1)) ? (return false) : continue
-    end
-  end
-  return true
-end
-
-"""
-  An internal to check if the action `rep` of a group on `V(I)` is symplectic.
-"""
-function _is_symplectic_action(rep::Vector, I) 
-  R  = base_ring(I)
-  d = total_degree(gens(I)[1])
-  rep_homo = homo_poly_rep(rep, R, d)
-  F = base_ring(R)
-  Coord, B = _homo_ideal_in_coord(I)
-  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
-  for i=1:length(rep)
-    PM = rep[i]
-    M = rep_homo[i]
-    MM = matrix(zeros(F,ncols(Coord),ncols(Coord)))
-    VV = VectorSpace(F,length(B))
-    Var,f = sub(VV, [VV(Coord[:,i]) for i=1:ncols(MM)])
-    Pas = hcat([transpose((f\VV(transpose(matrix(Coord[:,j])))).v) for j=1:ncols(MM)])
-    for j=1:ncols(MM)
-      MM[:,j] = inv(Pas)*transpose((f\VV(transpose(M*matrix(Coord[:,j])))).v)
-    end
-    l = F(det(PM))*F(inv(det(MM)))
-    l != F(1) ? (return false) : continue
-  end
-  return true
-end
-
-"""
-  An internak to check whether the action `rep` of a group on `V(I)` is purely 
-  non-symplectic.
-"""
-function _is_purely_non_symplectic_action(rep::Vector, I)
-  R  = base_ring(I)
-  d = total_degree(gens(I)[1])
-  F = base_ring(R)
-  Coord, B = _homo_ideal_in_coord(I)
-  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
-  MG = matrix_group(rep)
-  for m in MG
-    if m == one(MG)
-      continue
-    end
-    PM = matrix(m)
-    M = homo_poly_rep([PM], R, d)[1] 
-    MM = matrix(zeros(F,ncols(Coord),ncols(Coord)))
-    VV = VectorSpace(F,length(B))
-    Var,f = sub(VV, [VV(Coord[:,i]) for i=1:ncols(MM)])
-    Pas = hcat([transpose((f\VV(transpose(matrix(Coord[:,j])))).v) for j=1:ncols(MM)])
-    for j=1:ncols(MM)
-      MM[:,j] = inv(Pas)*transpose((f\VV(transpose(M*matrix(Coord[:,j])))).v)
-    end
-    l = F(det(PM))*F(inv(det(MM)))
-    l == F(1) ? (return false) : continue
-  end
-  return true
-end
-
-"""
-  Given `rep` acting on `V(I)`, return the id of the group generated by the
-  elements of `rep` acting symplectically on `V(I)`.
-"""
-function _id_symplectic_subgroup(rep::Vector, I; with::Bool = false)
-  R  = base_ring(I)
-  d = total_degree(gens(I)[1])
-  F = base_ring(R)
-  Coord, B = _homo_ideal_in_coord(I)
-  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
-  MG = matrix_group(rep)
-  coll = elem_type(MG)[]
-  for m in MG
-    PM = matrix(m)
-    M = homo_poly_rep([PM], R, d)[1]
-    MM = matrix(zeros(F,ncols(Coord),ncols(Coord)))
-    VV = VectorSpace(F,length(B))
-    Var,f = sub(VV, [VV(Coord[:,i]) for i=1:ncols(MM)])
-    Pas = hcat([transpose((f\VV(transpose(matrix(Coord[:,j])))).v) for j=1:ncols(MM)])
-    for j=1:ncols(MM)
-      MM[:,j] = inv(Pas)*transpose((f\VV(transpose(M*matrix(Coord[:,j])))).v)
-    end
-    l = F(det(PM))*F(inv(det(MM)))
-    l == F(1) ? push!(coll, m) : continue
-  end
-  MG2 = subgroup(MG, coll)[1]
-  if with == true
-    Q = quo(MG, MG2)[1]
-    return _id_group_rep(matrix.(coll)), matrix.(gens(Q))
-  else 
-    return _id_group_rep(matrix.(coll)), typeof(rep[1])[]
-  end
-end
-
-
 ##############################################################################
 #
-# Some polynomials bases manipulations
+# About tensors of homogeneous polynomials
 #
 ##############################################################################
 
+### Basis of exterior power
+
 """
-   basis`_`ext`_`power(B::Vector{T}, k::Int64) where T -> Vector{Vector{T}}
+   basis`_`exterior`_`power(B::Vector{T}, k::Int64) where T -> Vector{Vector{T}}
 
 Given a basis `B` of a vector space `V`, return a basis of the `t`-exterior power of
 `V` as a set of lists. Each list is ordered in strictly increasing order of the 
 indices of the corresponding elements in `B`. The output is ordered in the lexicographic
 order from the right in the indices of the corresponding elements in `B`
 """
-function basis_ext_power(B::Vector{T}, t::Int64) where T
+function basis_exterior_power(B::Vector{T}, t::Int64) where T
   l = length(B)
   L = _rec_perm(l,t)
   return Vector{T}[B[lis] for lis in L]
 end
 
-"""
-  An internal to transform a vector representing a basis element `base` of an exterior power
-  of a vector space into a matrix whose columns are the coordinates of each elements
-  of the vector in a basis `B` of the corresponding vector space.
-"""
-function _base_to_columns(base::Vector{T}, B::Vector{T}) where T 
-  columns = zeros(base_ring(base[1]),length(B), length(base))
-  for i=1:length(base)
-    columns[_index(B,base[i]),i] = base_ring(base[1])(1)
-  end
-  return matrix(columns)
-end
-
-"""
-  An internal that given an element `w` of the `t`-exterior power of a vector space 
-  expressed by its coordinates in a basis `basis` of this exterior power, returns it in the
-  form of a set of pairs consisting of the coefficients and the corresponding element of 
-  the basis (given as a matrix as in `_base_to_columns`) read from the coordinates `w`.
-"""
-function _change_basis(w, basis::Vector{Vector{T}}) where T 
-  @assert length(w) == length(basis) 
-  gene = [(w[i],basis[i]) for i =1:length(w) if w[i] != parent(w[i])(0)]
-  return gene
-end
-
-"""
-  An internal to change an homogeneous polynomial of `R` of degree `d`given in 
-  coordinates `w` into its polynomial form.
-"""
-function _coord_in_homo_poly(w::MatElem{T}, R::MPolyRing{T}, d::Int64) where T <: RingElem
-  B = homog_basis(R,d)
-  @assert length(B) == size(w)[1]
-  return sum([w[:,1][i]*B[i] for i=1:(size(w)[1])])
-end
-
-#################################################################################
-#
-#  Tensors operations/routines
-#
-#################################################################################
+### Operations on pure tensors
 
 """
   An internal to check if two pure tensors define the same element up to
@@ -928,6 +867,64 @@ function _in_basis(v::Vector{T}, basis::Vector{Vector{T}}) where T
   i = findfirst(w -> _same_base(v,w),basis)
   i == nothing ? (return false) : (return basis[i], _div(v,basis[i]))
 end
+
+"""
+  An internal that given an element `w` of the `t`-exterior power of a vector space 
+  expressed by its coordinates in a basis `basis` of this exterior power, returns it in the
+  form of a set of pairs consisting of the coefficients and the corresponding element of 
+  the basis (given as a matrix as in `_base_to_columns`) read from the coordinates `w`.
+"""
+function _change_basis(w, basis::Vector{Vector{T}}) where T 
+  @assert length(w) == length(basis) 
+  gene = [(w[i],basis[i]) for i =1:length(w) if w[i] != parent(w[i])(0)]
+  return gene
+end
+
+### wedge product of polynomials
+
+"""
+   wedge_product(F::Vector{T}) where T <: MPolyElem 
+                                 -> Vector{Tuple{nf_elem}, Vector{MPolyElem}}
+                                 
+Given a list of homogeneous polynomials `F` of the same polynomial algebra and of the same
+total degree, return their wedge product as an abstract tensor, seen as a list of tuples
+of coefficients and the respective elements of the basis of the exterior power.
+"""
+function wedge_product(F::Vector{T}) where T <: MPolyElem
+  if length(F) == 1
+    f = F[1]
+    R = parent(f)
+    d = total_degree(f)
+    B = homog_basis(R,d)
+    basis = basis_exterior_power(B, 1)
+    list_mon, list_coeff = collect(monomials(f)), collect(Oscar.coefficients(f))
+    part= [(list_coeff[i], [list_mon[i]]) for i=1:length(list_mon)]
+    return part
+  end
+  f = popfirst!(F)
+  wp = wedge_product(copy(F))
+  R = parent(f)
+  d = total_degree(f)
+  B = homog_basis(R,d)
+  basis = basis_exterior_power(B, length(F)+1)
+  list_mon, list_coeff = collect(monomials(f)), collect(Oscar.coefficients(f))
+  part = [(list_coeff[i], list_mon[i]) for i=1:length(list_mon)]
+  coeffs2 = zeros(base_ring(R), length(basis))
+  for l in part
+    for w in wp
+      if l[2] in w[2]
+        continue
+      end
+      w_co = copy(w[2])
+      lw_co = pushfirst!(w_co, l[2])
+      ba, mult = _in_basis(lw_co, basis)
+      coeffs2[_index(basis, ba)] += mult*w[1]*l[1]
+    end
+  end
+  return _change_basis(coeffs2, basis)
+end  
+
+### Operations on arbitrary tensors
 
 """
   An internal that computes the sum of two tensors in the same tensor space.
@@ -976,9 +973,9 @@ If not, it returns `(false, w)`
 """
 function is_pure(w, basis::Vector{Vector{T}}) where T <: MPolyElem
   R = parent(basis[1][1])
-  d = degrees(basis[1][1])[1]
+  d = total_degree(basis[1][1])
   B = homog_basis(R,d)
-  basis2 = basis_ext_power(B, length(basis[1])+1)
+  basis2 = basis_exterior_power(B, length(basis[1])+1)
   m, n = length(B), length(basis[1])
   F  = parent(w[1][1])
   Mat = matrix(zeros(F,length(basis2),length(B)))
@@ -1003,318 +1000,32 @@ function is_pure(w, basis::Vector{Vector{T}}) where T <: MPolyElem
   end
 end
 
-######################################################################
-#
-#  Intersections with Grassmannians (part 1/2)
-#
-######################################################################
+### Manipulation of tensors by their coordinates to the basis of the exterior power
 
 """
-  An internal to compute the intersection of the projectivisation of a 1-dimensional subvector
-  space `W` of the `t`-exterior power of another space `V` with the Grassmannian `Gr(t,V)`. The
-  output is false for empty intersection, otherwise it gives the completely decomposed form 
-  `dec` of the generator of `W` and the ideal `I` generated by the elements fo the pure tensor.
+  An internal to transform a vector representing a basis element `base` of an exterior power
+  of a vector space into a matrix whose columns are the coordinates of each elements
+  of the vector in a basis `B` of the corresponding vector space.
 """
-function _grass_comp(v::MatElem{S}, basis::Vector{Vector{T}}, smooth::Bool=true) where T <: MPolyElem{S} where S
-  R = parent(basis[1][1])
-  w = _change_basis(v, basis)
-  bool, dec  = is_pure(w, basis)
-  if bool
-    I = ideal(R,[dec[i] for i=1:length(dec)])
-    if (smooth == true && is_smooth(I)) || (smooth == false)
-      return [(dec, I)]
-    else
-      return false
-    end
-  else
-    return false
+function _base_to_columns(base::Vector{T}, B::Vector{T}) where T 
+  columns = zeros(base_ring(base[1]),length(B), length(base))
+  for i=1:length(base)
+    columns[_index(B,base[i]),i] = base_ring(base[1])(1)
   end
+  return matrix(columns)
 end
 
-"""
-  An internal to compute the intersection of the projectivisation of a 2-dimensional subvector
-  space `W` of the `t`-exterior power of another space `V` with the Grassmannian `Gr(t,V)`. The
-  output is false for empty intersection, otherwise it returns a vector of pairs consisting of
-  the completely decomposed form `dec` of an elementt of `W` and the ideal `I` generated by
-  the elements of the corresponding pure tensor.
-"""
-function _grass_comp_snf(V::Vector{T}, basis::Vector{Vector{S}}, smooth::Bool=true) where {T, S}
-  @req (length(V)==2 && V[1] != V[2]) "V has to be composed of exactly 2 vectors"
-  R = parent(basis[1][1])
-  d = degrees(basis[1][1])[1]
-  B = homog_basis(R,d)
-  basis2 = basis_ext_power(B, length(basis[1])+1)
-  m, n = length(B), length(basis[1])
-  v1,v2 = V
-  w1 = _change_basis(v1,basis)
-  w2 = _change_basis(v2,basis)
-  F = parent(w1[1][1])
-  bool1, dec1 = is_pure(w1,basis)
-  bool2, dec2 = is_pure(w2,basis)
-  L,y = PolynomialRing(F,"y")
-  if !bool2
-    w = _sum_tensors(_change_coeff_ring(w1, L), _rescale(_change_coeff_ring(w2,L),y))
-  else
-    w = _sum_tensors(_change_coeff_ring(w2, L), _rescale(_change_coeff_ring(w1,L),y))
-  end
-  Mat = matrix(zeros(L,length(basis2),length(B)))
-  for i=1:length(B)
-    col = zeros(L,length(basis2),1)
-    v = B[i]
-    for ww in w
-      if v in ww[2]
-        continue
-      end
-      vv, mult = _in_basis(vcat(v, ww[2]), basis2)
-      col[_index(basis2,vv)] = ww[1]*mult
-      Mat[:,i] = col
-    end
-  end
-  A = snf(Mat)
-  c = A[m-n+1,m-n+1]
-  if c == L(1) 
-    return false
-  elseif c == y
-    if !bool2
-      I = ideal(parent(dec1[1]),[dec1[i] for i=1:length(dec1)])
-      if (smooth && is_smooth(I)) || !smooth
-        return [(dec, I)]
-      else 
-        return false
-     end
-    else
-      I = ideal(parent(dec2[1]),[dec2[i] for i=1:length(dec2)])
-      if (smooth && is_smooth(I)) || !smooth
-        return [(dec, I)]
-      else  
-        return false        
-      end
-    end
-  elseif c == L(0)
-    return  [(V, false)]
-  elseif degree(c) >1
-    while evaluate(c,0) == 0
-      c = divexact(c,y)
-    end
-    pot = []
-    p = roots(c,F) 
-    for r in p
-      bool, dec = !bool2 ? is_pure(_change_basis(v1+r*v2,basis), basis) : is_pure(_change_basis(r*v1+v2,basis), basis)
-      @assert bool
-      I = ideal(R,[dec[i] for i=1:length(dec)])
-      if (smooth == true && is_smooth(I)) || (smooth == false)
-        push!(pot,(dec, I))
-      end
-    end
-    if length(pot) == 0	
-      return false
-    else
-      return pot
-    end
-  else
-    r = evaluate(c, 0)
-    bool, dec = !bool2 ? is_pure(_change_basis(v1+r*v2,basis), basis) : is_pure(_change_basis(r*v1+v2,basis), basis)
-    @assert bool	
-    I = ideal(R,[dec[i] for i=1:length(dec)])
-    if (smooth == true && is_smooth(I)) || (smooth == false)
-      return [(dec, I)]
-    else
-      return false
-    end
-  end
-end
-    
-"""
-  An internal function that returns the intersection of an isotypic component of weight 1 of
-  the `t`-exterior power `W` of the `d`-homogeneous part `V` of a polynomial algebra with
-  the Grassmannian `Gr(t,V). `W` is seen as a group algebra via `rep`. The input 'smooth' is
-  to allow only the elements in the intersection generating an ideal defining a smooth variety.
-"""
-function _inv_space(rep, chi , basis, smooth::Bool=true)
-  t = length(basis[1])
-  rep = t ==1 ? rep : ext_power_rep(rep, t)
-  rep = [rep[i]-chi[i][1]*identity_matrix(base_ring(rep[i]), ncols(rep[i])) for i=1:length(rep)]
-  rep = reduce(vcat, rep)
-  dim, V = kernel(rep)
-  if dim == 0
-    return false
-  end
-  V = [transpose(V[:,i]) for i=1:ncols(V)]
-  if t == 1
-    w = _change_basis(sum(V), basis)
-    _, dec = is_pure(w, basis)
-    I = ideal(parent(dec[1]),[dec[i] for i=1:length(dec)])
-    if (smooth && is_smooth(I)) || !smooth
-      return [(dec, I)]
-    else 
-      return false
-    end
-  end
-  if dim == 1
-    return _grass_comp(V[1], basis, smooth)
-  elseif dim == 2
-    return _grass_comp_snf(V,basis, smooth)
-  else
-    return [(V,false)]
-  end
-end
-
-##############################################################################
-#
-# Invariant homogeneous ideals under group actions
-#
-##############################################################################
+### Helper for intersection with Grassmannian
 
 """
-    invariant`_`ideal`_`same`_`degree(Id::Tuple{Int64, Int64}, nvar::Int64, degree::Int64, 
-				dim::Int64; smooth::Bool = true, symplectic::Bool = false, 
-				stopfirst::Bool = false)
-                                                -> Vector{Vector{MPolyIdeal}, Vector{MatElem}}
-
-Given a small group `G` of GAP ID `Id`, return all the homogeneous ideals generated by `dim` 
-polynomials in `nvar` variables and of the same degree `degree`. The output consists of a 
-vector of pairs `([I_1, dots, I_k], rep)` where the `I_i`'s are ideals invariant under the 
-action of `G` given by `rep`.
-
-If `smooth = true`, then only the ideals defining a smooth variety are returned.
-If `symplectic = true`, then only the ideal defining a variety on which `G` acts symplectically
-are returned.
-If `stopfirst = true`, then the function returns the first vector tuple `(I,rep)` satisfying the
-inputs.
-"""
-function invariant_ideal_same_degree(Id::Tuple{Int64,Int64}, nvar::Int64, degree::Int64, dim::Int64; smooth::Bool = true, symplectic::Bool = false, purely_non_symplectic::Bool = false, stopfirst = false)
-  o,b,d,t = Id[1], Id[2], degree, dim
-  (psr, char_gap, lin_oscar, lin_gap) = proj_suit_rep(o,b, nvar)
-  if isempty(psr)
-    return Any[]
-  end
-  F = base_ring(psr[1][1])
-  ct = GG.CharacterTable(GG.UnderlyingGroup(char_gap[1]))
-  R,x = PolynomialRing(F,"x"=>(1:nvar))
-  rep_homo, char_homo_gap  = homo_poly_rep(psr,d, (char_gap,ct))
-  B = homog_basis(R,d)
-  basis = basis_ext_power(B,t)
-  char_ext_gap = t == 1 ? char_homo_gap : GG.AntiSymmetricParts(ct, char_homo_gap,t)
-  L_rep = length(psr)
-  result = []
-  for i=1:L_rep
-    chara = char_ext_gap[i]
-    result2 = []	
-    nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(chara, lin_gap[j]) !=0]
-    for chi in nice_char
-      pot = _inv_space(rep_homo[i], chi, basis, smooth)
-      if pot != false
-        V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
-        if symplectic 
-	  _result_int = [II for II in I if II != false && _is_symplectic_action(psr[i], II)]
-	elseif purely_non_symplectic
-	  _result_int = [II for II in I if II != false && _is_purely_non_symplectic_action(psr[i], II)]
-	else
-	  _result_int = [II for II in I if II != false]
-	end
-	result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
-        if all(v -> v isa MPolyIdeal, result_int) 
-	  stopfirst ? (return (result_int[1], psr[i])) : result2 = union(result2, result_int)
-        else
-          result2 = union(result2, result_int)
-        end
-      end
-    end
-    length(result2) >0 ? push!(result, (result2, psr[i])) : nothing	  
-  end
-  return result
-end
-
-function invariant_ideal_same_degree(pr::Vector{Vector{MatElem{nf_elem}}}, char_gap::Vector{GAP.GapObj} , lin_oscar::Vector{Vector{MatElem{nf_elem}}}, lin_gap::Vector{GAP.GapObj}, d::Int64, t::Int64; smooth::Bool = true, symplectic::Bool = false, stopfirst = false, purely_non_symplectic::Bool = false)
-  @req !(symplectic && purely_non_symplectic) "Action cannot be symplectic AND purely non-symplectic"
-  nvar = ncols(pr[1][1])
-  F = base_ring(pr[1][1])
-  ct = GG.CharacterTable(GG.UnderlyingGroup(char_gap[1]))
-  R,x = PolynomialRing(F,"x"=>(1:nvar))
-  rep_homo, char_homo_gap  = homo_poly_rep(pr,d, (char_gap,ct))
-  B = homog_basis(R,d)
-  basis = basis_ext_power(B,t)
-  char_ext_gap = t == 1 ? char_homo_gap : GG.AntiSymmetricParts(ct, char_homo_gap,t)
-  L_rep = length(pr)
-  result = []
-  for i=1:L_rep
-    chara = char_ext_gap[i]
-    result2 = []
-    nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(chara, lin_gap[j]) !=0]
-    for chi in nice_char
-      pot = _inv_space(rep_homo[i], chi, basis, smooth)
-      if pot != false
-        V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
-        if symplectic
-          _result_int = [II for II in I if II != false && _is_symplectic_action(pr[i],  II)]
-        elseif purely_non_symplectic
-          _result_int = [II for II in I if II != false && _is_purely_non_symplectic_action(pr[i], II)]
-        else
-	  _result_int = [II for II in I if II != false]
-	end
-        result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
-        if all(v -> v isa MPolyIdeal, result_int)
-          stopfirst ? (return (result_int[1], psr[i])) : result2 = union(result2, result_int)
-        else
-          result2 = union(result2, result_int)
-        end
-      end
-    end
-    length(result2) >0 ? push!(result, (result2, pr[i])) : nothing
-  end
-  return result
-end
-
-function invariant_ideal_same_degree(pr::Vector{MatElem{nf_elem}}, char_gap::GAP.GapObj , lin_oscar::Vector{Vector{MatElem{nf_elem}}}, lin_gap::Vector{GAP.GapObj}, d::Int64, t::Int64; smooth::Bool = true, symplectic::Bool = false, purely_non_symplectic::Bool = false, stopfirst = false)
-  @req !(symplectic && purely_non_symplectic) "Action cannot be symplectic AND purely non-symplectic"
-  nvar = ncols(pr[1])
-  F = base_ring(pr[1])
-  ct = GG.CharacterTable(GG.UnderlyingGroup(char_gap))
-  R,x = PolynomialRing(F,"x"=>(1:nvar))
-  rep_homo, char_homo_gap  = homo_poly_rep([pr] ,d, ([char_gap],ct))
-  B = homog_basis(R,d)
-  basis = basis_ext_power(B,t)
-  char_ext_gap = t == 1 ? char_homo_gap : GG.AntiSymmetricParts(ct, char_homo_gap,t)
-  rep = rep_homo[1]
-  chara = char_ext_gap[1]
-  result = []
-  nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(chara, lin_gap[j]) !=0]
-  for chi in nice_char
-    pot = _inv_space(rep, chi, basis, smooth)
-    if pot != false
-      V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
-      if symplectic
-        _result_int = [II for II in I if II != false && _is_symplectic_action(pr, II)]
-      elseif purely_non_symplectic
-        _result_int = [II for II in I if II != false && _is_purely_non_symplectic_action(pr,II)]
-      else
-        _result_int = [II for II in I if II != false]
-      end
-      result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
-      if all(v -> v isa MPolyIdeal, result_int)
-        stopfirst ? (return (result_int[1], pr)) : result = union(result, result_int)
-      else
-        result = union(result, result_int)
-      end
-    end
-  end
-  return result
-end
-
-#######################################################################################
-#
-# Intersections with Grassmannians (part 2/2)
-#
-#######################################################################################
-
-"""
-  An internal to compute a matrix of an isomprhism from the `t`-exterior power of a 
-  `n`-dimensional vector space to the `(n-t)`-exterior power of its dual.
+  An internal to compute a matrix of an isomorphism from the `t`-exterior power of a 
+  `n`-dimensional homogeneous component of a polynomial algebra to the `(n-t)`-exterior 
+  power of its dual.
 """
 function _matrix_ext_powers(B::Vector{T},k::Int64, l::Int64) where T <: MPolyElem{nf_elem}
   @req length(B) == k+l "l should be equal to length(B)-k"
-  basis = basis_ext_power(B,k)
-  basis2 = basis_ext_power(B,l)
+  basis = basis_exterior_power(B,k)
+  basis2 = basis_exterior_power(B,l)
   F = base_ring(B[1])
   Mat = matrix(zeros(F, length(basis2), length(basis)))
   for j=1:length(basis)
@@ -1327,6 +1038,412 @@ function _matrix_ext_powers(B::Vector{T},k::Int64, l::Int64) where T <: MPolyEle
   end
   return Mat
 end
+
+"""
+  An internal to compute the matrix of the linear map from which we read the pure tensors 
+  from the degeneracy locus at which the rank doesn't exceed a certain bound
+"""
+function _matrix_multivec_star(V, B, k::Int64)
+  @assert base_ring(B[1]) == parent(V[1][1])
+  R = parent(B[1])
+  F = base_ring(R)
+  l = length(B)-k
+  Basis = basis_exterior_power(B,k)
+  Basis2 = basis_exterior_power(B,l)
+  Basis3 = basis_exterior_power(B,l+1)
+  L,y = PolynomialRing(F,"y"=>(1:length(V)))
+  w = sum([y[i]*map_entries(L, V[i]) for i=1:length(V)])
+  Mat = _matrix_ext_powers(B,k,l)
+  wstar = _change_basis(Mat*transpose(w), Basis2)
+  Mat = matrix(zeros(L,length(Basis3),length(B)))
+  for i=1:length(B)
+    col = zeros(L,length(Basis3),1)
+    v = B[i]
+    for ww in wstar
+      if v in ww[2]
+        continue
+      end
+      vv, mult = _in_basis(vcat(ww[2],v), Basis3)
+      col[_index(Basis3,vv)] = ww[1]*mult
+      Mat[:,i] = col
+    end
+  end
+  return Mat
+end
+
+##############################################################################
+#
+# Induced representations
+#
+##############################################################################
+
+### Helper to compute induced representations on different vector spaces
+
+function _induced_representation(prep::ProjRep, M::Vector{T}, chara::GAP.GapObj) where T <: MatElem
+  lr = LinRep(representation_ring(prep), M, chara)
+  return ProjRep(lr, underlying_group(prep))
+end
+
+### Induced representations on homogeneous component of polynomial algebra
+
+"""
+  An internal for computing dual representations in matrix form from those in `Rep`.
+"""
+function _dual_representation(prep::ProjRep)
+  Rep = matrix_representation(prep)
+  char = char_gap(prep)
+  Rep_dual = [transpose(inv(rep)) for rep in Rep]
+  char_dual = GG.ComplexConjugate(GAP.julia_to_gap([char], recursive = true))[1]
+  return _induced_representation(prep, Rep_dual, char_dual)
+end
+
+"""
+  An internal that compute the action of a group on an `d`-homogeneous part of
+  a polynomial algebra `R` from a matrix form `M` of the action on the variables of `R`.
+"""
+function _action_poly_ring(M::MatElem{T},R::MPolyRing{T},d::Int64) where T <: RingElem
+  @assert nrows(M) == nvars(R)
+  B = homog_basis(R,d)
+  v = _mat_to_poly(M,R)
+  MM = zeros(base_ring(M), length(B), length(B))
+  for i =1:(length(B))
+    W = evaluate(B[i],v)
+    C = collect(terms(W))
+    for c in C
+      MM[_index(B,collect(monomials(c))[1]),i] = collect(coeffs(c))[1]
+    end
+  end
+  return matrix(MM)
+end
+
+_homo_poly_action(m, R, d) = _action_poly_ring(transpose(inv(m)), R, d)
+"""
+   homo`_`poly`_`rep(Rep:Vector{Vector{T}}, d::Int64, (char`_`gap, ct)::Tuple{Vector{S}, S})
+                 where T <: MatElem, S <: GAP.GapObj
+                    -> Vector{Vector{T}}, Vector{S}
+
+Given a set `Rep` of linear representations of a group `G` on a finite dimensional complex 
+vector space `V`, return the induced representations on the `d` homogeneous part of the dual
+of `V` seen as a polynomial algebra.
+
+- The first output is the set of induced representations given in Oscar matrix form;
+- The second output is the set of the corresponding characters given as GAP objects
+  computed from the input `char_gap`, the characters of the original representations,
+  and `ct` the character table of `G`.
+"""
+function homo_poly_rep(prep::ProjRep, d::Int64)
+  prep_dual = _dual_representation(prep)
+  ct = character_table(representation_ring(prep))
+  R = polynomial_algebra(representation_ring(prep))
+  if R === nothing
+    R, _ = PolynomialRing(splitting_field(representation_ring(prep)), "x" => 1:dim(prep), cached = false)
+  end
+  Rep_homo = [_action_poly_ring(m,R,d) for m in matrix_representation(prep_dual)]
+  char_homo = GG.SymmetricParts(ct, GAP.julia_to_gap([char_gap(prep_dual)], recursive = true),d)[1]
+  prep_homo = _induced_representation(prep_dual, Rep_homo, char_homo)
+  set_attribute!(prep, :prep_homo, prep_homo)
+  set_attribute!(prep_homo, :degree_homo, d)
+  return prep_homo
+end
+
+### Induced representation on exterior power of homogeneous component of polynomials
+### algebra
+
+"""
+    ext__homo_poly_rep(Rep::Vector{T}, R::MPolyring, d::Int64, t::Int64) 
+                                               where T <: MatElem{nf_elem}
+                                                                -> Vector{T}
+
+Given a representation of a group on a the `d` homogeneous part of `R`,
+return the induced representation on the `t`-exterior power of `R_d` given in
+matrix form.
+"""
+function ext_homo_poly_rep(prep_homo::ProjRep, t::Int64)
+  @req 1 <= t <= dim(prep_homo) "t must be contain between 1 and the dimension $(dim(prep_homo)) of prep"
+  d = get_attribute(prep_homo, :degree_homo)
+  @assert d !== nothing
+  R = polynomial_algebra(representation_ring(prep_homo))
+  B = homog_basis(R,d)
+  basis = basis_exterior_power(B,t)
+  chara = char_gap(prep_homo)
+  ct = character_table(representation_ring(prep_homo))
+  Rep_homo = matrix_representation(prep_homo)
+  prep_ext = typeof(Rep_homo[1])[]
+  for M in Rep_homo
+    M_ext = zeros(base_ring(M), length(basis), length(basis))
+    for i =1:length(basis)
+      b = basis[i]
+      bb = [_coord_in_homo_poly(M*_homo_poly_in_coord(bbb), R, d) for bbb in b]
+      wp = wedge_product(bb)
+      for bbb in wp
+        M_ext[_index(basis, bbb[2]), i] += bbb[1]
+      end
+    end
+    push!(prep_ext, matrix(M_ext))
+  end
+  chara_ext = GG.AntiSymmetricParts(ct, GAP.julia_to_gap([chara], recursive=true), t)[1]
+  return _induced_representation(prep_homo, prep_ext, chara_ext)
+end
+
+##############################################################################
+#
+# Fitting ideals (with authorization)
+#
+##############################################################################
+
+"""
+  An internal based on a code of Matthias Zach (TU Kaiserslautern) for computation
+  of fitting ideals. Here it is used to look for the ideal of coordinates of pure
+  tensors (computed from the denegeracy locus for the rank of a sparse matrix) and
+  the smoothness test.
+"""
+function _ideal_degeneracy(X, Mfact, k)
+  one(localized_ring(OO(X))) in localized_modulus(OO(X)) ? (return [X.OO.R.base_ring]) : nothing
+  
+  Mfact = _refact(Mfact)
+  val, row, col = Mfact
+
+  if k == 1
+    if length(val) == 0  
+      return [X]
+    else
+      Y = subscheme(X, ideal(X.OO.R, val))
+      one(localized_ring(OO(X))) in localized_modulus(OO(X)) ? (return [Y.OO.R.base_ring]) : (return [Y])
+    end
+  end
+  
+  if length(val) == 0
+    return [X]
+  end
+  
+  d = maximum(total_degree.(val))
+  (i, j) = (1, 1)
+
+  for l=1:length(val)
+    val[l] = numerator(reduce(X.OO.W(val[l]), groebner_basis(localized_modulus(OO(X)))))
+    if total_degree(val[l]) <= d && !iszero(val[l])
+      d = total_degree(val[l])
+      (i, j) = (row[l], col[l])
+    end
+  end
+  
+  v = _value(Mfact, i, j)
+
+  if iszero(val)
+    return [X]
+  end
+  
+  val2, row2, col2 = typeof(val[1])[], [], []
+  for l in union(1:(i-1), (i+1):maximum(row))
+    for m=1:maximum(col)
+      vall = _value(Mfact, l, m)*v - _value(Mfact, i, m)*_value(Mfact, l, j)
+      if !iszero(vall)
+        push!(val2, vall)
+	l < i ?	push!(row2, l) : push!(row2, l-1)
+	m < j ? push!(col2, m) : push!(col2, m-1)
+      end
+    end
+  end
+    
+  Mfact = (val, row, col)
+  Mfact2 = (val2, row2, col2)
+
+  Y = subscheme(X, v)
+  U = hypersurface_complement(X, v)
+
+  ID = _ideal_degeneracy(Y, Mfact, k)
+  _ID2 = _ideal_degeneracy(U, Mfact2, k-1)
+  ID2 = [closure(V, X) for V in _ID2 if V != X.OO.R.base_ring]
+
+  ID = [V for V in ID if V != X.OO.R.base_ring && (radical(V.OO.I) != ideal(V.OO.R, gens(V.OO.R)) && radical(V.OO.I) != ideal(V.OO.R, V.OO.R(1)))]
+  ID2 = [V for V in ID2 if V != X.OO.R.base_ring && (radical(V.OO.I) != ideal(V.OO.R, gens(V.OO.R)) && radical(V.OO.I) != ideal(V.OO.R, V.OO.R(1)))]
+  return union(ID,ID2)
+end
+
+##############################################################################
+#
+# some checks functions
+#
+##############################################################################
+
+### Smoothness test
+
+"""
+   is`_`smooth(I::T) where T <: MPolyIdeal -> Bool
+
+Given an homogeneous ideal `I`, return `true` if `V(I)` is smooth, `false` else.
+"""
+function is_smooth(I::T) where T <:MPolyIdeal
+  v = [f for f in gens(I)]
+  R = base_ring(I)
+  L = quo(R,I)[1]
+  X = Spec(L)
+  x = gens(R)
+  D = jacobi_matrix(v)
+  Dfact = _sparse_matrix_fact(D)
+  k = length(x) - Oscar.dim(L)
+  ID = _ideal_degeneracy(X, Dfact, k)
+  length(ID) == 0 ? (return true) : nothing
+  for Y in ID
+    bool = true
+    for y in x
+      U = hypersurface_complement(Y, y)
+      bool = one(U.OO.W) in localized_modulus(OO(U)) ? bool : false
+    end
+    bool == false ? (return bool) : nothing
+  end
+  return true
+end
+
+### Invariance test
+
+"""
+  An internal to check if an ideal is invariant under a group action given by `rep_homo`.
+  The generators of `I` has to be of the same degree
+"""
+function _is_invariant_by_rep(prep::ProjRep, I::T) where {S,T}
+  R = base_ring(I)
+  @req R == polynomial_algebra(representation_ring(prep)) "polynomial algebra must coincide"
+  d = total_degree(gens(I)[1])
+  prep_homo = get_attribute(prep, :prep_homo)
+  if prep_homo !== nothing
+    d0 = get_attribute(prep_homo, :degree_homo)
+  end
+  if (prep_homo === nothing || d != d0)
+    prep_homo = homo_poly_rep(prep, d)
+  end
+  F = base_ring(R)
+  Coord,_ = _homo_ideal_in_coord(I)
+  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
+  Rep_homo = matrix_representation(prep_homo)
+  for M in Rep_homo
+    for j=1:ncols(Coord)
+      act = change_base_ring(L,M*matrix(Coord[:,j]))
+      v = y[end]*act-sum([y[i]*change_base_ring(L,matrix(Coord[:,i])) for i=1:ncols(Coord)])
+      II = ideal(L,[v[i,:][1] for i=1:nrows(v)])
+      J = radical(II)
+      J == ideal(L,y) || J == ideal(L,L(1)) ? (return false) : continue
+    end
+  end
+  return true
+end
+
+### About (non)-symplectic actions
+
+"""
+  An internal to check if the action `rep` of a group on `V(I)` is symplectic.
+"""
+function _is_symplectic_action(prep::ProjRep, I) 
+  R = base_ring(I)
+  @req R == polynomial_algebra(representation_ring(prep)) "polynomial algebra must coincide"
+  d = total_degree(gens(I)[1])
+  prep_homo = get_attribute(prep, :prep_homo)
+  if prep_homo !== nothing
+    d0 = get_attribute(prep_homo, :degree_homo)
+  end
+  if (prep_homo === nothing || d != d0)
+    prep_homo = homo_poly_rep(prep, R, d)
+  end
+  F = base_ring(R)
+  Coord, B = _homo_ideal_in_coord(I)
+  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
+  Rep = matrix_representation(prep)
+  Rep_homo = matrix_representation(prep_homo)
+  for i=1:length(Rep_homo)
+    PM = Rep[i]
+    M = Rep_homo[i]
+    MM = matrix(zeros(F,ncols(Coord),ncols(Coord)))
+    VV = VectorSpace(F,length(B))
+    Var,f = sub(VV, [VV(Coord[:,i]) for i=1:ncols(MM)])
+    Pas = hcat([transpose((f\VV(transpose(matrix(Coord[:,j])))).v) for j=1:ncols(MM)])
+    for j=1:ncols(MM)
+      MM[:,j] = inv(Pas)*transpose((f\VV(transpose(M*matrix(Coord[:,j])))).v)
+    end
+    l = F(det(PM))*F(inv(det(MM)))
+    l != F(1) ? (return false) : continue
+  end
+  return true
+end
+
+"""
+  An internak to check whether the action `rep` of a group on `V(I)` is purely 
+  non-symplectic.
+"""
+function _is_purely_non_symplectic_action(prep::ProjRep, I)
+  R = base_ring(I)
+  @req R == polynomial_algebra(representation_ring(prep)) "polynomial algebra must coincide"
+  d = total_degree(gens(I)[1])
+  F = base_ring(R)
+  Coord, B = _homo_ideal_in_coord(I)
+  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
+  Rep = matrix_representation(prep)
+  MG = matrix_group(Rep)
+  H = conjugacy_classes(MG)
+  for h in H
+    m = representative(h)
+    if m == one(MG)
+      continue
+    end
+    PM = matrix(m)
+    M = _homo_poly_action(PM, R, d) 
+    MM = matrix(zeros(F,ncols(Coord),ncols(Coord)))
+    VV = VectorSpace(F,length(B))
+    Var,f = sub(VV, [VV(Coord[:,i]) for i=1:ncols(MM)])
+    Pas = hcat([transpose((f\VV(transpose(matrix(Coord[:,j])))).v) for j=1:ncols(MM)])
+    for j=1:ncols(MM)
+      MM[:,j] = inv(Pas)*transpose((f\VV(transpose(M*matrix(Coord[:,j])))).v)
+    end
+    l = F(det(PM))*F(inv(det(MM)))
+    l == F(1) ? (return false) : continue
+  end
+  return true
+end
+
+"""
+  Given `rep` acting on `V(I)`, return the id of the group generated by the
+  elements of `rep` acting symplectically on `V(I)`.
+"""
+function _id_symplectic_subgroup(prep::ProjRep, I; with::Bool = false)
+  R = base_ring(I)
+  @req R == polynomial_algebra(representation_ring(prep)) "polynomial algebra must coincide"
+  d = total_degree(gens(I)[1])
+  F = base_ring(R)
+  Coord, B = _homo_ideal_in_coord(I)
+  L,y = PolynomialRing(F,"y" => (1:(ncols(Coord)+1)), cached = false)
+  Rep = matrix_representation(prep)
+  MG = matrix_group(Rep)
+  H = conjugacy_classes(MG)
+  coll = elem_type(MG)[]
+  for h in H
+    m = representative(h)
+    PM = matrix(m)
+    M = _homo_poly_action(PM, R, d) 
+    MM = matrix(zeros(F,ncols(Coord),ncols(Coord)))
+    VV = VectorSpace(F,length(B))
+    Var,f = sub(VV, [VV(Coord[:,i]) for i=1:ncols(MM)])
+    Pas = hcat([transpose((f\VV(transpose(matrix(Coord[:,j])))).v) for j=1:ncols(MM)])
+    for j=1:ncols(MM)
+      MM[:,j] = inv(Pas)*transpose((f\VV(transpose(M*matrix(Coord[:,j])))).v)
+    end
+    l = F(det(PM))*F(inv(det(MM)))
+    l == F(1) ? append!(coll, elements(h)) : continue
+  end
+  if with == true
+    MG2 = subgroup(MG, coll)[1]
+    Q, p = quo(MG, MG2)
+    gQ = gens(Q)
+    gMG2 = [p\q for q in gQ]
+    return _id_group_rep(matrix.(coll)), matrix.(gMG2)
+  else 
+    return _id_group_rep(matrix.(coll)), typeof(Rep[1])[]
+  end
+end
+
+######################################################################
+#
+#  Sparse matrices
+#
+######################################################################
 
 """
   An internal to reduce a polynomial sparse matrix by deleting all zero rows and 
@@ -1396,122 +1513,144 @@ function _refact(Mfact)
   return (valbis, rowbis, colbis)
 end
 
-"""
-  An internal that checks is all the elements of a list are distinct.
-"""
-function _distinct(L)
-  L2 = [L[1]]
-  for l in L
-    !(l in L2) ? (push!(L2,l)) : continue 
-  end
-  return L2 == L
-end
+######################################################################
+#
+#  Intersections with Grassmannians
+#
+######################################################################
+
+### Dimension 1: check purity of a basis tensor
 
 """
-  An internal based on a code of Matthias Zach (TU Kaiserslautern) for computation
-  of fitting ideals. Here it is used to look for the ideal of coordinates of pure
-  tensors (computed from the denegeracy locus for the rank of a sparse matrix).
+  An internal to compute the intersection of the projectivisation of a 1-dimensional subvector
+  space `W` of the `t`-exterior power of another space `V` with the Grassmannian `Gr(t,V)`. The
+  output is false for empty intersection, otherwise it gives the completely decomposed form 
+  `dec` of the generator of `W` and the ideal `I` generated by the elements fo the pure tensor.
 """
-function _ideal_degeneracy(X, Mfact, k)
-  one(localized_ring(OO(X))) in localized_modulus(OO(X)) ? (return [X.OO.R.base_ring]) : nothing
-  
-  Mfact = _refact(Mfact)
-  val, row, col = Mfact
-
-  if k == 1
-    if length(val) == 0  
-      return [X]
+function _grass_comp(v::MatElem{S}, basis::Vector{Vector{T}}, smooth::Bool=true) where T <: MPolyElem{S} where S
+  R = parent(basis[1][1])
+  w = _change_basis(v, basis)
+  bool, dec  = is_pure(w, basis)
+  if bool
+    I = ideal(R,[dec[i] for i=1:length(dec)])
+    if (smooth == true && is_smooth(I)) || (smooth == false)
+      return [(dec, I)]
     else
-      Y = subscheme(X, ideal(X.OO.R, val))
-      one(localized_ring(OO(X))) in localized_modulus(OO(X)) ? (return [Y.OO.R.base_ring]) : (return [Y])
+      return false
     end
+  else
+    return false
   end
-
-  d = maximum(total_degree.(val))
-  (i, j) = (1, 1)
-
-  for l=1:length(val)
-    val[l] = numerator(reduce(X.OO.W(val[l]), groebner_basis(localized_modulus(OO(X)))))
-    if total_degree(val[l]) <= d && !iszero(val[l])
-      d = total_degree(val[l])
-      (i, j) = (row[l], col[l])
-    end
-  end
-  
-  v = _value(Mfact, i, j)
-
-  if iszero(val)
-    return [X]
-  end
-  
-  val2, row2, col2 = typeof(val[1])[], [], []
-  for l in union(1:(i-1), (i+1):maximum(row))
-    for m=1:maximum(col)
-      vall = _value(Mfact, l, m)*v - _value(Mfact, i, m)*_value(Mfact, l, j)
-      if !iszero(vall)
-        push!(val2, vall)
-	l < i ?	push!(row2, l) : push!(row2, l-1)
-	m < j ? push!(col2, m) : push!(col2, m-1)
-      end
-    end
-  end
-    
-  Mfact = (val, row, col)
-  Mfact2 = (val2, row2, col2)
-
-  Y = subscheme(X, v)
-  U = hypersurface_complement(X, v)
-
-  ID = _ideal_degeneracy(Y, Mfact, k)
-  _ID2 = _ideal_degeneracy(U, Mfact2, k-1)
-  ID2 = [closure(V, X) for V in _ID2 if V != X.OO.R.base_ring]
-
-  ID = [V for V in ID if V != X.OO.R.base_ring && (radical(V.OO.I) != ideal(V.OO.R, gens(V.OO.R)) && radical(V.OO.I) != ideal(V.OO.R, V.OO.R(1)))]
-  ID2 = [V for V in ID2 if V != X.OO.R.base_ring && (radical(V.OO.I) != ideal(V.OO.R, gens(V.OO.R)) && radical(V.OO.I) != ideal(V.OO.R, V.OO.R(1)))]
-  return union(ID,ID2)
 end
 
+### Dimension 2: put one coefficient to 1 and use snf to check which values are allowed for 
+### the second coordinate
+
 """
-  An internal to compute the matrix of the linear map from which we read the pure tensors 
-  from the degeneracy locus at which the rank doesn't exceed a certain rank.
+  An internal to compute the intersection of the projectivisation of a 2-dimensional subvector
+  space `W` of the `t`-exterior power of another space `V` with the Grassmannian `Gr(t,V)`. The
+  output is false for empty intersection, otherwise it returns a vector of pairs consisting of
+  the completely decomposed form `dec` of an elementt of `W` and the ideal `I` generated by
+  the elements of the corresponding pure tensor. If the pure tensors form a family, then the
+  elements of the basis in coordinates are returned back, to be used in
+  '_grass_comp_big_degree'.
 """
-function _matrix_multivec_star(V, B, k::Int64)
-  @assert base_ring(B[1]) == parent(V[1][1])
-  R = parent(B[1])
-  F = base_ring(R)
-  l = length(B)-k
-  Basis = basis_ext_power(B,k)
-  Basis2 = basis_ext_power(B,l)
-  Basis3 = basis_ext_power(B,l+1)
-  L,y = PolynomialRing(F,"y"=>(1:length(V)))
-  w = sum([y[i]*map_entries(L, V[i]) for i=1:length(V)])
-  Mat = _matrix_ext_powers(B,k,l)
-  wstar = _change_basis(Mat*transpose(w), Basis2)
-  Mat = matrix(zeros(L,length(Basis3),length(B)))
+function _grass_comp_snf(V::Vector{T}, basis::Vector{Vector{S}}, smooth::Bool=true) where {T, S}
+  @req (length(V)==2 && V[1] != V[2]) "V has to be composed of exactly 2 vectors"
+  R = parent(basis[1][1])
+  d = degrees(basis[1][1])[1]
+  B = homog_basis(R,d)
+  basis2 = basis_exterior_power(B, length(basis[1])+1)
+  m, n = length(B), length(basis[1])
+  v1,v2 = V
+  w1 = _change_basis(v1,basis)
+  w2 = _change_basis(v2,basis)
+  F = parent(w1[1][1])
+  bool1, dec1 = is_pure(w1,basis)
+  bool2, dec2 = is_pure(w2,basis)
+  L,y = PolynomialRing(F,"y", cached = false)
+  if !bool2
+    w = _sum_tensors(_change_coeff_ring(w1, L), _rescale(_change_coeff_ring(w2,L),y))
+  else
+    w = _sum_tensors(_change_coeff_ring(w2, L), _rescale(_change_coeff_ring(w1,L),y))
+  end
+  Mat = matrix(zeros(L,length(basis2),length(B)))
   for i=1:length(B)
-    col = zeros(L,length(Basis3),1)
+    col = zeros(L,length(basis2),1)
     v = B[i]
-    for ww in wstar
+    for ww in w
       if v in ww[2]
         continue
       end
-      vv, mult = _in_basis(vcat(ww[2],v), Basis3)
-      col[_index(Basis3,vv)] = ww[1]*mult
+      vv, mult = _in_basis(vcat(v, ww[2]), basis2)
+      col[_index(basis2,vv)] = ww[1]*mult
       Mat[:,i] = col
     end
   end
-  return Mat
+  A = snf(Mat)
+  c = A[m-n+1,m-n+1]
+  if c == L(1) 
+    return false
+  elseif c == y
+    if !bool2
+      I = ideal(parent(dec1[1]),[dec1[i] for i=1:length(dec1)])
+      if (smooth && is_smooth(I)) || !smooth
+        return [(dec, I)]
+      else 
+        return false
+     end
+    else
+      I = ideal(parent(dec2[1]),[dec2[i] for i=1:length(dec2)])
+      if (smooth && is_smooth(I)) || !smooth
+        return [(dec, I)]
+      else  
+        return false        
+      end
+    end
+  elseif c == L(0)
+    return  [(V, false)]
+  elseif Oscar.degree(c) >1
+    while evaluate(c,0) == 0
+      c = divexact(c,y)
+    end
+    pot = []
+    p = roots(c,F) 
+    for r in p
+      bool, dec = !bool2 ? is_pure(_change_basis(v1+r*v2,basis), basis) : is_pure(_change_basis(r*v1+v2,basis), basis)
+      @assert bool
+      I = ideal(R,[dec[i] for i=1:length(dec)])
+      if (smooth == true && is_smooth(I)) || (smooth == false)
+        push!(pot,(dec, I))
+      end
+    end
+    if length(pot) == 0	
+      return false
+    else
+      return pot
+    end
+  else
+    r = evaluate(c, 0)
+    bool, dec = !bool2 ? is_pure(_change_basis(v1-r*v2,basis), basis) : is_pure(_change_basis(r*v1-v2,basis), basis)
+    @assert bool	
+    I = ideal(R,[dec[i] for i=1:length(dec)])
+    if (smooth == true && is_smooth(I)) || (smooth == false)
+      return [(dec, I)]
+    else
+      return false
+    end
+  end
 end
+    
+### Dimension >= 2
 
 """
-  An internal still under development and improvement to compute intersection with 
-  Grassmannian varieties in dimension bigger than 2. For now, it returns the ideals
-  parametrising the coordinates of pure tensors. It still need to compute representatives
-  of all the orbits and construct the corresponding modules/ideals.
+  An internal to compute intersection with Grassmannian varieties in dimension bigger than 
+  2. For now, it returns the ideals parametrising the coordinates of pure tensors. It 
+  still need the user to construct the (family.ies of) pure tensors 'by hand'
 """
 function _grass_comp_big_degree(V, basis)
   R = parent(basis[1][1])
-  d = degrees(basis[1][1])[1]
+  d = total_degree(basis[1][1])
   B = homog_basis(R,d)
   k = length(basis[1])
   M = _matrix_multivec_star(V, B, k)
@@ -1520,4 +1659,185 @@ function _grass_comp_big_degree(V, basis)
   ID = _ideal_degeneracy(X, Mfact, k+1)
   return modulus.(OO.(ID))
 end
+
+##############################################################################
+#
+# Invariant homogeneous ideals under group actions
+#
+##############################################################################
+
+### Computations of homotypic components in exterior power
+
+"""
+  An internal function that returns the intersection of an isotypic component of weight 1 of
+  the `t`-exterior power `W` of the `d`-homogeneous part `V` of a polynomial algebra with
+  the Grassmannian `Gr(t,V). `W` is seen as a group algebra via `rep`. The input 'smooth' is
+  to allow only the elements in the intersection generating an ideal defining a smooth variety.
+"""
+function _inv_space(prep_homo::ProjRep, chi::Vector, t::Int64, smooth::Bool=true)
+  R = polynomial_algebra(representation_ring(prep_homo))
+  d = get_attribute(prep_homo, :degree_homo)
+  basis = basis_exterior_power(homog_basis(R,d), t)
+  prep_ext = t ==1 ? prep_homo : ext_homo_poly_rep(prep_homo, t)
+  rep = matrix_representation(prep_ext)
+  rep = [rep[i]-chi[i][1]*identity_matrix(base_ring(R), ncols(rep[1])) for i=1:length(rep)]
+  rep = reduce(vcat, rep)
+  srep = sparse_matrix(rep)
+  dim, V = right_kernel(srep)
+  if dim == 0
+    return false
+  end
+  V = [transpose(V[:,i]) for i=1:ncols(V)]
+  if t == 1
+    w = _change_basis(sum(V), basis)
+    _, dec = is_pure(w, basis)
+    I = ideal(parent(dec[1]),[dec[i] for i=1:length(dec)])
+    if (smooth && is_smooth(I)) || !smooth
+      return [(dec, I)]
+    else 
+      return false
+    end
+  end
+  if dim == 1
+    return _grass_comp(V[1], basis, smooth)
+  elseif dim == 2
+    return _grass_comp_snf(V,basis, smooth)
+  else
+    return [(V,false)]
+  end
+end
+
+"""
+    invariant`_`ideal`_`same`_`degree(Id::Tuple{Int64, Int64}, nvar::Int64, degree::Int64, 
+				dim::Int64; smooth::Bool = true, symplectic::Bool = false, 
+				stopfirst::Bool = false)
+
+Given a small group `G` of GAP ID `Id`, return all the homogeneous ideals generated by `dim` 
+polynomials in `nvar` variables and of the same degree `degree`. The output consists of a 
+vector of pairs `([I_1, dots, I_k], rep)` where the `I_i`'s are ideals invariant under the 
+action of `G` given by `rep`.
+
+If `smooth = true`, then only the ideals defining a smooth variety are returned.
+If `symplectic = true`, then only the ideal defining a variety on which `G` acts symplectically
+are returned.
+If `stopfirst = true`, then the function returns the first vector tuple `(I,rep)` satisfying the
+inputs.
+"""
+function invariant_ideal_same_degree(Id::Tuple{Int64,Int64}, nvar::Int64, degree::Int64, dim::Int64; smooth::Bool = true, symplectic::Bool = false, purely_non_symplectic::Bool = false, stopfirst = false)
+  @req !(symplectic && purely_non_symplectic) "Action cannot be symplectic AND purely non-symplectic"
+  o,b,d,t = Id[1], Id[2], degree, dim
+  pfr = projectively_faithful_representations(o,b, nvar)
+  if isempty(pfr)
+    return Any[]
+  end
+  RR = representation_ring(pfr[1])
+  ct = character_table(RR)
+  lin_oscar = get_attribute(RR, :lin_oscar)
+  lin_gap = get_attribute(RR, :lin_gap)
+  R = polynomial_algebra(RR)
+  L_rep = length(pfr)
+  result = []
+  for i=1:L_rep
+    prep = pfr[i]
+    prep_homo = homo_poly_rep(prep, d)
+    chara = t == 1 ? char_gap(prep_homo) : GG.AntiSymmetricParts(ct, GAP.julia_to_gap([char_gap(prep_homo)], recursive = true), t)[1]
+    result2 = []	
+    nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(ct, chara, lin_gap[j]) !=0]
+    for chi in nice_char
+      pot = _inv_space(prep_homo, chi, t, smooth)
+      if pot != false
+        V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
+        if symplectic 
+	  _result_int = [II for II in I if II != false && _is_symplectic_action(prep, II)]
+	elseif purely_non_symplectic
+	  _result_int = [II for II in I if II != false && _is_purely_non_symplectic_action(prep, II)]
+	else
+	  _result_int = [II for II in I if II != false]
+	end
+	result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
+        if all(v -> v isa MPolyIdeal, result_int) 
+	  stopfirst ? (return (result_int[1], prep)) : result2 = union(result2, result_int)
+        else
+          result2 = union(result2, result_int)
+        end
+      end
+      GC.gc()
+    end
+    length(result2) >0 ? push!(result, (result2, prep)) : nothing	  
+  end
+  return result
+end
+
+function invariant_ideal_same_degree(preps::Vector{ProjRep}, d::Int64, t::Int64; smooth::Bool = true, symplectic::Bool = false, stopfirst = false, purely_non_symplectic::Bool = false)
+  @req !(symplectic && purely_non_symplectic) "Action cannot be symplectic AND purely non-symplectic"
+  RR = representation_ring(preps[1])
+  ct = character_table(RR)
+  lin_oscar = get_attribute(RR, :lin_oscar)
+  lin_gap = get_attribute(RR, :lin_gap)
+  R = polynomial_algebra(RR)
+  L_rep = length(preps)
+  result = []
+  for i=1:L_rep
+    prep = preps[1]
+    prep_homo = homo_poly_rep(prep, d)
+    chara = t == 1 ? char_gap(prep_homo) : GG.AntiSymmetricParts(ct, GAP.julia_to_gap([char_gap(prep_homo)], recursive = true), t)[1]
+    result2 = []
+    nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(chara, lin_gap[j]) !=0]
+    for chi in nice_char
+      pot = _inv_space(prep_homo, chi, t, smooth)
+      if pot != false
+        V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
+        if symplectic
+          _result_int = [II for II in I if II != false && _is_symplectic_action(prep,  II)]
+        elseif purely_non_symplectic
+          _result_int = [II for II in I if II != false && _is_purely_non_symplectic_action(prep, II)]
+        else
+	  _result_int = [II for II in I if II != false]
+	end
+        result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
+        if all(v -> v isa MPolyIdeal, result_int)
+          stopfirst ? (return (result_int[1], prep)) : result2 = union(result2, result_int)
+        else
+          result2 = union(result2, result_int)
+        end
+      end
+    end
+    length(result2) >0 ? push!(result, (result2, prep)) : nothing
+  end
+  return result
+end
+
+function invariant_ideal_same_degree(prep::ProjRep, d::Int64, t::Int64; smooth::Bool = true, symplectic::Bool = false, purely_non_symplectic::Bool = false, stopfirst = false)
+  @req !(symplectic && purely_non_symplectic) "Action cannot be symplectic AND purely non-symplectic"
+  RR = representation_ring(prep)
+  ct = character_table(RR)
+  lin_oscar = get_attribute(RR, :lin_oscar)
+  lin_gap = get_attribute(RR, :lin_gap)
+  R = polynomial_algebra(RR)
+  prep_homo = homo_poly_rep(prep, d)
+  chara = t == 1 ? char_gap(prep_homo) : GG.AntiSymmetricParts(ct, GAP.julia_to_gap([char_gap(prep_homo)], recursive = true), t)[1]
+  result = []
+  nice_char = [lin_oscar[j] for j=1:(length(lin_oscar)) if GG.ScalarProduct(chara, lin_gap[j]) !=0]
+  for chi in nice_char
+    pot = _inv_space(prep_homo, chi, t, smooth)
+    if pot != false
+      V, I = [pott[1] for pott in pot], [pott[2] for pott in pot]
+      if symplectic
+        _result_int = [II for II in I if II != false && _is_symplectic_action(prep, II)]
+      elseif purely_non_symplectic
+        _result_int = [II for II in I if II != false && _is_purely_non_symplectic_action(prep,II)]
+      else
+        _result_int = [II for II in I if II != false]
+      end
+      result_int = union(_result_int, [V[i] for i=1:length(V) if I[i] == false])
+      if all(v -> v isa MPolyIdeal, result_int)
+        stopfirst ? (return (result_int[1], prep)) : result = union(result, result_int)
+      else
+        result = union(result, result_int)
+      end
+    end
+  end
+  return result
+end
+
 
